@@ -4,7 +4,9 @@
 //! UI never borrows the store while it is being written. The UI reads a copy of the timeline.
 
 mod login;
+mod tab_bar;
 mod timeline;
+mod viewer;
 
 use crate::components::fps::{fps_badge, FpsMeter};
 use crate::logic::client::{ClientError, ImmichClient};
@@ -16,6 +18,7 @@ use crate::web_adapters::{fetch::FetchTransport, idb, local_storage, WebClock};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -53,7 +56,13 @@ pub(crate) struct Immagine {
     fps: u32,
     worst_ms: u32,
     webgpu: bool,
-    scroll: Rc<RefCell<()>>,
+    tab: usize,
+    prev_tab: usize,
+    tab_gen: u32,
+    /// Screen bounds of the tiles painted last, so the viewer can zoom out of the tapped one.
+    tile_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
+    viewer: Option<viewer::Viewer>,
+    viewer_serial: u32,
 }
 
 impl Immagine {
@@ -101,7 +110,12 @@ impl Immagine {
             fps: 0,
             worst_ms: 0,
             webgpu,
-            scroll: Rc::new(RefCell::new(())),
+            tab: 0,
+            prev_tab: 0,
+            tab_gen: 0,
+            tile_bounds: Rc::new(RefCell::new(HashMap::new())),
+            viewer: None,
+            viewer_serial: 0,
         };
         this.resume(cx);
         this
@@ -245,6 +259,19 @@ impl Immagine {
     }
 }
 
+impl Immagine {
+    fn coming_soon(&self, p: &Palette) -> impl IntoElement {
+        div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(px(17.))
+            .text_color(p.secondary)
+            .child(format!("{} folgt bald", tab_bar::TABS[self.tab]))
+    }
+}
+
 impl Render for Immagine {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::new(self.dark);
@@ -252,8 +279,11 @@ impl Render for Immagine {
         let content = match self.screen {
             Screen::Loading => div().into_any_element(),
             Screen::Login => self.login_view(&p, cx).into_any_element(),
-            Screen::Timeline => self.timeline_view(&p, window, cx).into_any_element(),
+            Screen::Timeline if self.tab == 0 => self.timeline_view(&p, window, cx).into_any_element(),
+            Screen::Timeline => self.coming_soon(&p).into_any_element(),
         };
+        let chrome = (self.screen == Screen::Timeline).then(|| self.tab_bar(&p, cx));
+        let viewer = if self.screen == Screen::Timeline { self.viewer_overlay(window, cx) } else { None };
         div()
             .size_full()
             .relative()
@@ -261,6 +291,8 @@ impl Render for Immagine {
             .bg(linear_gradient(160., linear_color_stop(bg_from, 0.), linear_color_stop(bg_to, 1.)))
             .text_color(p.label)
             .child(content)
+            .children(chrome)
+            .children(viewer)
             .child(fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, self.webgpu))
     }
 }

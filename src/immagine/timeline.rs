@@ -12,22 +12,49 @@ impl Immagine {
         let columns = ((vw / 120.).floor() as usize).clamp(3, 8);
         let cell = ((vw - GAP * (columns as f32 - 1.)) / columns as f32).floor();
         let rows = self.items.len().div_ceil(columns);
+        let footer = self.bottom.max(10.) + 84.;
 
         let items = self.items.clone();
         let origin = self.origin.clone();
         let placeholder = p.chip;
-        let list = uniform_list("timeline", rows, move |range, _, _| {
+        let view = cx.weak_entity();
+        let bounds_map = self.tile_bounds.clone();
+        let list = uniform_list("timeline", rows + 1, move |range, _, _| {
             range
                 .map(|row| {
-                    let tiles = (0..columns).filter_map(|c| items.get(row * columns + c)).map(|item| {
+                    let tiles = (0..columns).filter_map(|c| items.get(row * columns + c).map(|item| (row * columns + c, item))).map(|(idx, item)| {
+                        let view = view.clone();
+                        let bounds_map = bounds_map.clone();
                         let url = format!("{origin}/api/assets/{}/thumbnail?size=thumbnail", item.id);
                         div()
+                            .id(("tile", idx))
+                            .relative()
                             .size(px(cell))
                             .flex_none()
                             .bg(placeholder)
                             .child(img(SharedUri::from(url)).size_full().object_fit(ObjectFit::Cover))
+                            .child(
+                                canvas(
+                                    move |bounds, _, _| {
+                                        let mut map = bounds_map.borrow_mut();
+                                        if map.len() > 600 {
+                                            map.clear();
+                                        }
+                                        map.insert(idx, bounds);
+                                    },
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .size_full(),
+                            )
+                            .on_click(move |_, _, cx| {
+                                view.update(cx, |this, cx| this.open_viewer(idx, cx)).ok();
+                            })
                     });
-                    div().h(px(cell + GAP)).flex().gap(px(GAP)).children(tiles)
+                    if row >= rows {
+                        return div().h(px(footer)).into_any_element();
+                    }
+                    div().h(px(cell + GAP)).flex().gap(px(GAP)).children(tiles).into_any_element()
                 })
                 .collect()
         })

@@ -146,3 +146,10 @@ Phase 0 (1 Person)
   2. GPUIs Asset-Cache behält dekodierte Thumbnails; bei langem Scrollen wächst der Speicher. Lösung: eigener LRU-Image-Cache (`rendition_cache`) / `RetainAllImageCache`-Ersatz.
   3. Schlechte Frame-Zeiten beim Dekodieren (Worst-Frame bis 90 ms).
   4. Kein Platzhalter aus Thumbhash, kein Tab-Bar, kein Viewer, keine Alben/Personen.
+
+## 15. Stand Welle C, Teil 2: Tab-Bar und Viewer (im Browser-Pane geprüft)
+
+- **Tab-Bar** (`src/immagine/tab_bar.rs`): Glas-Leiste mit Mediathek / Alben / Personen und animiertem Schieber; Alben und Personen zeigen noch „folgt bald“ (`Immagine::coming_soon`).
+- **Viewer** (`src/immagine/viewer.rs`): Zoom aus der angetippten Kachel (Kachel-Bounds über ein `canvas` pro Kachel in `tile_bounds`), Wischen links/rechts zum Blättern (Nachbarseiten werden vorgeladen), Wischen nach unten oder „Fertig“ schließt. Jede Seite legt die schon geladene Grid-Vorschau unter das `preview`-Bild (Platzhalter ohne Sprung). Geprüft: öffnen (5 von 24 942), blättern (→ 6), Wisch-nach-unten-Schließen, Tab-Wechsel.
+- **Nicht umgesetzt im Viewer:** Pinch-/Doppeltipp-Zoom, Original statt Vorschau, Video-Wiedergabe, Filmstreifen, Teilen/Favorit/Info/Löschen, Snap-Back-Animation beim Abbrechen eines Wischs, Tastatursteuerung.
+- Muster für Views, die `cx` brauchen: Rückgabetyp `AnyElement` (sonst Borrow-Fehler), Klick-Handler in `uniform_list`-Closures über `cx.weak_entity()`.
