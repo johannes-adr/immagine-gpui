@@ -12,7 +12,7 @@ use crate::logic::models::asset_details::InfoFormat;
 use crate::logic::models::asset_info::AssetInfoFormat;
 use crate::logic::models::timeline::TimelineItem;
 use crate::theme::{BLUE, GLASS_TINT_DARK, RED};
-use crate::util::{anim, lerp};
+use crate::util::{anim, lerp, now_ms};
 use crate::web_adapters::fetch::FetchTransport;
 use crate::web_adapters::pinch::{self, Pinch};
 use crate::web_adapters::video::{self, VideoHandle};
@@ -49,6 +49,17 @@ enum DragMode {
     Dismiss,
 }
 
+/// An ease-out back to rest, driven by the clock from the render pass (one step per animation frame).
+#[derive(Clone, Copy)]
+struct Snap {
+    start: f64,
+    dx0: f32,
+    dy0: f32,
+    ds0: f32,
+}
+
+const SNAP_MS: f64 = 260.;
+
 /// Where the photo was (full-viewport box before aspect fitting) and how faded the backdrop when a drag closed it.
 #[derive(Clone, Copy)]
 struct Release {
@@ -77,6 +88,7 @@ pub(super) struct Viewer {
     vel_y: f32,
     release: Option<Release>,
     snap_id: u32,
+    snap: Option<Snap>,
     zoom: f32,
     pan: (f32, f32),
     /// Two fingers are down: single-pointer drags are ignored.
@@ -159,6 +171,7 @@ impl Immagine {
             vel_y: 0.,
             release: None,
             snap_id: 0,
+            snap: None,
             zoom: 1.,
             pan: (0., 0.),
             pinching: false,
@@ -229,6 +242,7 @@ impl Immagine {
             v.vel_y = 0.;
             v.mode = DragMode::Undecided;
             v.snap_id += 1;
+            v.snap = None;
             cx.notify();
         }
     }
@@ -318,36 +332,15 @@ impl Immagine {
         cx.notify();
     }
 
-    /// Eases the drag offset and scale back to rest (or to the new page's place) over a short moment.
+    /// Eases the drag offset and scale back to rest (or to the new page's place). The motion is computed from
+    /// the clock in `viewer_overlay`, which asks for a frame until it is over.
     fn snap_back(&mut self, dx0: f32, dy0: f32, ds0: f32, cx: &mut Context<Self>) {
         let Some(v) = self.viewer.as_mut() else { return };
-        v.dx = dx0;
-        v.dy = dy0;
-        v.ds = ds0;
-        v.snap_id += 1;
-        let id = v.snap_id;
-        cx.spawn(async move |this, cx| {
-            const STEPS: u32 = 18;
-            for i in 1..=STEPS {
-                cx.background_executor().timer(Duration::from_millis(16)).await;
-                let t = i as f32 / STEPS as f32;
-                let e = 1. - (1. - t).powi(3);
-                let alive = this
-                    .update(cx, |th, cx| {
-                        let Some(v) = th.viewer.as_mut().filter(|v| v.snap_id == id) else { return false };
-                        v.dx = dx0 * (1. - e);
-                        v.dy = dy0 * (1. - e);
-                        v.ds = ds0 + (1. - ds0) * e;
-                        cx.notify();
-                        true
-                    })
-                    .unwrap_or(false);
-                if !alive {
-                    break;
-                }
-            }
-        })
-        .detach();
+        v.dx = 0.;
+        v.dy = 0.;
+        v.ds = 1.;
+        v.snap = Some(Snap { start: now_ms(), dx0, dy0, ds0 });
+        cx.notify();
     }
 
     /// Double-tap toggles between fit and a closer look at the tapped point.
@@ -404,6 +397,7 @@ impl Immagine {
                 v.start = None;
                 v.mode = DragMode::None;
                 v.snap_id += 1;
+                v.snap = None;
                 v.dx = 0.;
                 v.dy = 0.;
                 v.ds = 1.;
@@ -517,7 +511,17 @@ impl Immagine {
         let (vw, vh): (f32, f32) = (vs.width.into(), vs.height.into());
         v.viewport.set((vw, vh));
         let (index, closing, dx, dy, zoom, pan) = (v.index, v.closing, v.dx, v.dy, v.zoom, v.pan);
-        let (ds, anchor, release) = (v.ds, v.anchor, v.release);
+        let (mut ds, anchor, release) = (v.ds, v.anchor, v.release);
+        let (mut dx, mut dy) = (dx, dy);
+        let now = now_ms();
+        let snap = v.snap.filter(|s| now - s.start < SNAP_MS);
+        if let Some(s) = snap {
+            let t = ((now - s.start) / SNAP_MS) as f32;
+            let e = 1. - (1. - t).powi(3);
+            (dx, dy, ds) = (s.dx0 * (1. - e), s.dy0 * (1. - e), s.ds0 + (1. - s.ds0) * e);
+            window.request_animation_frame();
+        }
+        let snapping = snap.is_some();
         let from = v.from.map(|b| {
             let (x, y): (f32, f32) = (b.origin.x.into(), b.origin.y.into());
             let (w, h): (f32, f32) = (b.size.width.into(), b.size.height.into());
@@ -541,9 +545,11 @@ impl Immagine {
         for k in near {
             let Some(item) = items.get(k) else { continue };
             let url = |size: &str| format!("{origin}/api/assets/{}/thumbnail?size={size}", item.id);
-            let thumb = thumbs::get(&store, &format!("t:{}", item.id), || url("thumbnail"), cx);
-            let preview = thumbs::get(&store, &format!("p:{}", item.id), || url("preview"), cx);
-            let full = if k == index && zoom > FULLSIZE_ZOOM { thumbs::get(&store, &format!("f:{}", item.id), || url("fullsize"), cx) } else { None };
+            // While the photos slide into place only what is decoded already is used: a decode now would drop frames.
+            let (tk, pk, fk) = (format!("t:{}", item.id), format!("p:{}", item.id), format!("f:{}", item.id));
+            let thumb = if snapping { thumbs::peek(&store, &tk) } else { thumbs::get(&store, &tk, || url("thumbnail"), cx) };
+            let preview = if snapping { thumbs::peek(&store, &pk) } else { thumbs::get(&store, &pk, || url("preview"), cx) };
+            let full = if k == index && zoom > FULLSIZE_ZOOM && !snapping { thumbs::get(&store, &fk, || url("fullsize"), cx) } else { None };
             pictures.insert(k, [thumb, preview, full]);
         }
         let page = move |k: usize, cover: bool| -> Option<AnyElement> {

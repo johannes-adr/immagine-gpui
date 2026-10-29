@@ -103,6 +103,16 @@ fn render_image(width: u32, height: u32, mut rgba: Vec<u8>) -> Option<Arc<Render
     Some(Arc::new(RenderImage::new(vec![Frame::new(buffer)])))
 }
 
+/// The decoded image for `key` if it is already there. Unlike `get` it never starts a load, so it is safe
+/// during an animation where a decode on the main thread would drop frames.
+pub(super) fn peek(store: &SharedThumbs, key: &str) -> Option<Arc<RenderImage>> {
+    let mut s = store.borrow_mut();
+    let frame = s.frame;
+    let entry = s.images.get_mut(key)?;
+    entry.stamp = frame;
+    Some(entry.image.clone())
+}
+
 /// The decoded image for `key`, or `None` while it loads (the request is queued here).
 pub(super) fn get(store: &SharedThumbs, key: &str, url: impl FnOnce() -> String, cx: &mut App) -> Option<Arc<RenderImage>> {
     {
