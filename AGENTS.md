@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for coding agents (Claude Code and others) working in this repository. `CLAUDE.md` imports this file.
 
 An iOS-style Reminders + Photos demo written with GPUI (via `gpui-kit`) and compiled to WebAssembly. There are no tests and no lint config; verification is done by loading the app in a browser or the iOS Simulator.
 
