@@ -60,8 +60,12 @@ pub(crate) struct Immagine {
     worst_ms: u32,
     webgpu: bool,
     tab: usize,
-    prev_tab: usize,
     tab_gen: u32,
+    // Tab bar thumb: drag in progress, where it started its last move (tab units) and the bubble size then.
+    tab_drag: Option<tab_bar::TabDrag>,
+    tab_from: f32,
+    bubble_from: f32,
+    thumb_gen: u32,
     /// Screen bounds of the tiles painted last, so the viewer can zoom out of the tapped one.
     tile_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     viewer: Option<viewer::Viewer>,
@@ -118,8 +122,11 @@ impl Immagine {
             worst_ms: 0,
             webgpu,
             tab: 0,
-            prev_tab: 0,
             tab_gen: 0,
+            tab_drag: None,
+            tab_from: 0.,
+            bubble_from: 0.,
+            thumb_gen: 0,
             tile_bounds: Rc::new(RefCell::new(HashMap::new())),
             viewer: None,
             viewer_serial: 0,
@@ -303,7 +310,7 @@ impl Render for Immagine {
         };
         // The renderer copies the glass backdrop once per frame at the first glass element; with the tab bar
         // gone while the viewer is open, the viewer's own glass sees the photo instead of the grid.
-        let chrome = (self.screen == Screen::Timeline && self.viewer.is_none()).then(|| self.tab_bar(&p, cx));
+        let chrome = (self.screen == Screen::Timeline && self.viewer.is_none()).then(|| self.tab_bar(&p, window, cx));
         let viewer = if self.screen == Screen::Timeline { self.viewer_overlay(window, cx) } else { None };
         div()
             .size_full()
