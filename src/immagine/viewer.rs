@@ -513,7 +513,10 @@ impl Immagine {
             window.request_animation_frame();
         }
         let snapping = snap.is_some();
-        let from = v.from.map(|b| {
+        // Closing shrinks into the tile of the photo that is shown now (not the one the viewer was opened on); when
+        // that tile is not on screen the photo just fades out.
+        let tile = if closing { self.tile_bounds.borrow().get(&index).copied().filter(|b| f32::from(b.origin.y) < vh && f32::from(b.origin.y + b.size.height) > 0.) } else { v.from };
+        let from = tile.map(|b| {
             let (x, y): (f32, f32) = (b.origin.x.into(), b.origin.y.into());
             let (w, h): (f32, f32) = (b.size.width.into(), b.size.height.into());
             (x, y, w, h)
