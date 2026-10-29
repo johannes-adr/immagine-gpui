@@ -7,7 +7,9 @@ use crate::components::glass::glass_div;
 use crate::theme::GLASS_TINT_DARK;
 use crate::util::{anim, lerp};
 use gpui_kit::*;
+use crate::logic::models::timeline::TimelineItem;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,6 +19,7 @@ const PAGE_FRACTION: f32 = 0.2;
 const CLOSE_DISTANCE: f32 = 120.;
 
 pub(super) struct Viewer {
+    items: Rc<Vec<TimelineItem>>,
     index: usize,
     from: Option<Bounds<Pixels>>,
     closing: bool,
@@ -32,10 +35,11 @@ fn xy(p: Point<Pixels>) -> (f32, f32) {
 }
 
 impl Immagine {
-    pub(super) fn open_viewer(&mut self, index: usize, cx: &mut Context<Self>) {
+    /// Opens the viewer on `items[index]`, zooming out of the grid tile with that index if it was painted.
+    pub(super) fn open_viewer(&mut self, items: Rc<Vec<TimelineItem>>, index: usize, cx: &mut Context<Self>) {
         let from = self.tile_bounds.borrow().get(&index).copied();
         self.viewer_serial += 1;
-        self.viewer = Some(Viewer { index, from, closing: false, serial: self.viewer_serial, start: None, dx: 0., dy: 0. });
+        self.viewer = Some(Viewer { items, index, from, closing: false, serial: self.viewer_serial, start: None, dx: 0., dy: 0. });
         cx.notify();
     }
 
@@ -81,8 +85,8 @@ impl Immagine {
     }
 
     fn drag_end(&mut self, width: f32, cx: &mut Context<Self>) {
-        let count = self.items.len();
         let Some(v) = self.viewer.as_mut() else { return };
+        let count = v.items.len();
         if v.start.take().is_none() {
             return;
         }
@@ -113,7 +117,7 @@ impl Immagine {
             let (w, h): (f32, f32) = (b.size.width.into(), b.size.height.into());
             (x, y, w, h)
         });
-        let items = self.items.clone();
+        let items = v.items.clone();
         let origin = self.origin.clone();
         let top = self.top.max(12.);
         let count = items.len();
@@ -138,7 +142,7 @@ impl Immagine {
             };
             Some(div().size_full().children(layer(thumb)).children(layer(preview)).into_any_element())
         };
-        let date = self.items.get(index).map(|i| i.date_bucket.clone()).unwrap_or_default();
+        let date = v.items.get(index).map(|i| i.date_bucket.clone()).unwrap_or_default();
 
         Some(
             div()

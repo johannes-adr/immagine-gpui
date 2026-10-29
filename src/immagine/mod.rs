@@ -3,7 +3,9 @@
 //! Sync runs off a `SyncEngine` that is moved into the sync task and handed back when it ends, so the
 //! UI never borrows the store while it is being written. The UI reads a copy of the timeline.
 
+mod albums;
 mod login;
+mod people;
 mod tab_bar;
 mod thumbs;
 mod timeline;
@@ -65,6 +67,8 @@ pub(crate) struct Immagine {
     viewer: Option<viewer::Viewer>,
     viewer_serial: u32,
     thumbs: thumbs::SharedThumbs,
+    albums: albums::AlbumsState,
+    people: people::PeopleState,
 }
 
 impl Immagine {
@@ -119,6 +123,8 @@ impl Immagine {
             viewer: None,
             viewer_serial: 0,
             thumbs: thumbs::new(cx.weak_entity()),
+            albums: Default::default(),
+            people: Default::default(),
         };
         this.resume(cx);
         this
@@ -168,6 +174,7 @@ impl Immagine {
         match SyncEngine::new(store, FetchTransport, WebClock, &self.origin) {
             Ok(engine) => {
                 self.items = Rc::new(engine.store().fetch_timeline());
+                self.albums.refresh(engine.store());
                 self.engine = Some(engine);
                 self.screen = Screen::Timeline;
             }
@@ -251,6 +258,9 @@ impl Immagine {
             mark("sync: timeline + snapshot built");
             let _ = this.update(cx, |t, cx| {
                 t.engine = Some(engine);
+                if let Some(e) = &t.engine {
+                    t.albums.refresh(e.store());
+                }
                 t.syncing = false;
                 match &outcome {
                     Ok(_) => t.status.clear(),
@@ -274,19 +284,6 @@ impl Immagine {
     }
 }
 
-impl Immagine {
-    fn coming_soon(&self, p: &Palette) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_size(px(17.))
-            .text_color(p.secondary)
-            .child(format!("{} folgt bald", tab_bar::TABS[self.tab]))
-    }
-}
-
 impl Render for Immagine {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::new(self.dark);
@@ -295,7 +292,8 @@ impl Render for Immagine {
             Screen::Loading => div().into_any_element(),
             Screen::Login => self.login_view(&p, cx).into_any_element(),
             Screen::Timeline if self.tab == 0 => self.timeline_view(&p, window, cx).into_any_element(),
-            Screen::Timeline => self.coming_soon(&p).into_any_element(),
+            Screen::Timeline if self.tab == 1 => self.albums_view(&p, window, cx),
+            Screen::Timeline => self.people_view(&p, window, cx),
         };
         let chrome = (self.screen == Screen::Timeline).then(|| self.tab_bar(&p, cx));
         let viewer = if self.screen == Screen::Timeline { self.viewer_overlay(window, cx) } else { None };

@@ -2,25 +2,35 @@
 
 use super::{thumbs, Immagine};
 use crate::theme::Palette;
+use crate::logic::models::timeline::TimelineItem;
 use gpui_kit::*;
+use std::rc::Rc;
 
 const GAP: f32 = 2.;
 
 impl Immagine {
-    pub(super) fn timeline_view(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    /// A virtualized, scrollable photo grid with a spacer for the tab bar at its end. Tapping a tile opens the
+    /// viewer on `items`. Reused by the timeline, album pages and person pages; `id` must be unique per screen.
+    pub(super) fn photo_grid(
+        &self,
+        id: &'static str,
+        items: Rc<Vec<TimelineItem>>,
+        p: &Palette,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> UniformList {
         let vw: f32 = window.viewport_size().width.into();
         let columns = ((vw / 120.).floor() as usize).clamp(3, 8);
         let cell = ((vw - GAP * (columns as f32 - 1.)) / columns as f32).floor();
-        let rows = self.items.len().div_ceil(columns);
+        let rows = items.len().div_ceil(columns);
         let footer = self.bottom.max(10.) + 84.;
 
-        let items = self.items.clone();
         let origin = self.origin.clone();
         let placeholder = p.chip;
         let view = cx.weak_entity();
         let store = self.thumbs.clone();
         let bounds_map = self.tile_bounds.clone();
-        let list = uniform_list("timeline", rows + 1, move |range, window, cx| {
+        uniform_list(id, rows + 1, move |range, window, cx| {
             store.borrow_mut().begin_frame();
             for evicted in store.borrow_mut().take_evicted() {
                 let _ = window.drop_image(evicted);
@@ -31,6 +41,7 @@ impl Immagine {
                         let view = view.clone();
                         let store = store.clone();
                         let bounds_map = bounds_map.clone();
+                        let all = items.clone();
                         let key = format!("t:{}", item.id);
                         let loaded = thumbs::get(&store, &key, || format!("{origin}/api/assets/{}/thumbnail?size=thumbnail", item.id), cx);
                         let picture = match (loaded, item.thumbhash.as_deref()) {
@@ -39,7 +50,7 @@ impl Immagine {
                             (None, None) => None,
                         };
                         div()
-                            .id(("tile", idx))
+                            .id((id, idx))
                             .relative()
                             .size(px(cell))
                             .flex_none()
@@ -60,7 +71,7 @@ impl Immagine {
                                 .size_full(),
                             )
                             .on_click(move |_, _, cx| {
-                                view.update(cx, |this, cx| this.open_viewer(idx, cx)).ok();
+                                view.update(cx, |this, cx| this.open_viewer(all.clone(), idx, cx)).ok();
                             })
                     });
                     if row >= rows {
@@ -70,7 +81,11 @@ impl Immagine {
                 })
                 .collect()
         })
-        .flex_1();
+        .flex_1()
+    }
+
+    pub(super) fn timeline_view(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let list = self.photo_grid("timeline", self.items.clone(), p, window, cx);
 
         let count = self.items.len();
         let subtitle = if self.status.is_empty() { format!("{count} Fotos") } else { self.status.clone() };
