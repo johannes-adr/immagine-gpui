@@ -7,6 +7,11 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#cfe3ff">
+  <meta name="apple-mobile-web-app-title" content="Reminders">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="modulepreload" href="pkg/gpui_web_demo.js">
   <title>Reminders</title>
   <style>
     /* Pin the page to the visible area so iOS Safari cannot scroll the document or leave a gap
@@ -15,21 +20,46 @@
       background: #cfe3ff; -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }
     @supports (height: 100dvh) { html, body { height: 100dvh; } }
     @media (prefers-color-scheme: dark) { html, body { background: #0b1026; } }
+    /* Launch screen: shown instantly, removed once GPUI has painted its first frame. */
+    #splash { position: fixed; inset: 0; box-sizing: border-box; padding: calc(env(safe-area-inset-top) + 64px) 20px 0;
+      font: 700 34px/1.2 -apple-system, system-ui, sans-serif; color: #1c2a44;
+      background: linear-gradient(160deg, #cfe3ff, #e9dcff); transition: opacity .2s; }
+    #splash i { display: block; height: 52px; margin-top: 12px; border-radius: 14px; background: rgba(255,255,255,.55); }
+    #splash i:first-of-type { margin-top: 24px; }
+    @media (prefers-color-scheme: dark) { #splash { color: #fff; background: linear-gradient(160deg, #0b1026, #1d1740); }
+      #splash i { background: rgba(255,255,255,.08); } }
     #probe { position: fixed; visibility: hidden; pointer-events: none;
       padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
   </style>
 </head>
 <body>
+  <div id="splash">Reminders<i></i><i></i><i></i></div>
   <div id="probe"></div>
   <script type="module">
-    import init, { run } from "./pkg/gpui_web_demo.js";
+    // Start the wasm download right away, in parallel with the JS glue module.
+    const t0 = performance.now();
+    const wasm = fetch(new URL("./pkg/gpui_web_demo_bg.wasm", import.meta.url));
+    const log = (m) => console.log(`[boot] ${m} +${Math.round(performance.now() - t0)}ms (since nav ${Math.round(performance.now())}ms)`);
     try {
+      const { default: init, run } = await import("./pkg/gpui_web_demo.js");
       const cs = getComputedStyle(document.getElementById("probe"));
-      await init();
+      log("js loaded");
+      await init({ module_or_path: wasm });
+      log("wasm ready");
       run(parseFloat(cs.paddingTop) || 0, parseFloat(cs.paddingBottom) || 0,
           matchMedia("(prefers-color-scheme: dark)").matches, !!navigator.gpu);
+      log("run returned");
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        log("first frame");
+        const sp = document.getElementById("splash");
+        sp.style.opacity = 0;
+        setTimeout(() => sp.remove(), 250);
+      }));
     } catch (e) {
       document.body.textContent = "Failed to load the application: " + e;
+    }
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
     }
   </script>
 </body>

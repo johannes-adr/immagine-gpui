@@ -5,6 +5,23 @@ CERT_DIR = "certs"
 
 class H(http.server.SimpleHTTPRequestHandler):
     extensions_map = {**http.server.SimpleHTTPRequestHandler.extensions_map, ".wasm": "application/wasm"}
+    def send_head(self):
+        # Serve precompressed <file>.br / <file>.gz (written by build.sh) when the client accepts them.
+        path = self.translate_path(self.path)
+        accept = self.headers.get("Accept-Encoding", "")
+        if os.path.isfile(path):
+            for enc, ext in (("br", ".br"), ("gzip", ".gz")):
+                if enc in accept and os.path.isfile(path + ext):
+                    f = open(path + ext, "rb")
+                    self.send_response(200)
+                    self.send_header("Content-Type", self.guess_type(path))
+                    self.send_header("Content-Encoding", enc)
+                    self.send_header("Content-Length", str(os.fstat(f.fileno()).st_size))
+                    self.send_header("Vary", "Accept-Encoding")
+                    self.end_headers()
+                    return f
+        return super().send_head()
+
     def end_headers(self):
         self.send_header("Cache-Control", "no-cache")
         super().end_headers()

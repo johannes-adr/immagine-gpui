@@ -859,8 +859,8 @@ mod web {
             // The web platform starts with no fonts; load them before opening a window.
             cx.text_system()
                 .add_fonts(vec![
-                    Cow::Borrowed(include_bytes!("../assets/Arial.ttf").as_slice()),
-                    Cow::Borrowed(include_bytes!("../assets/Arial-Bold.ttf").as_slice()),
+                    Cow::Borrowed(include_bytes!("../assets/Arial.sub.ttf").as_slice()),
+                    Cow::Borrowed(include_bytes!("../assets/Arial-Bold.sub.ttf").as_slice()),
                 ])
                 .expect("failed to load fonts");
             gpui_kit::init(cx);

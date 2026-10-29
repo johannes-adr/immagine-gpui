@@ -15,6 +15,8 @@ python3 serve.py                                   # http://localhost:8080 and h
 - Needs **nightly** Rust (`rust-toolchain.toml`); stable fails inside the `wasm_thread` dependency.
 - If `serve.py` says "Address already in use", an old server holds the port: `lsof -ti tcp:8080 | xargs kill`.
 - `assets/Arial.ttf` and `assets/Arial-Bold.ttf` are git-ignored but `include_bytes!`'d in `src/lib.rs`; the build fails without them. The web platform ships no fonts and panics when none are loaded before the window opens.
+- `build.sh` also runs `wasm-opt -O3` (binaryen) and precompresses wasm/js to `.br`/`.gz`; `brew install binaryen brotli`. Do not use `wasm-opt --all-features` (produces wasm browsers reject: "unknown import kind"); the explicit `--enable-*` list incl. `--enable-threads` is required.
+- `assets/*.sub.ttf` (what the build embeds) are Latin subsets of the Arial files, made by `./subset-fonts.sh` (needs fonttools); they are git-ignored like the originals.
 - Rebuild after any Rust or `vendor/` change; `www/index.html` changes need no rebuild.
 
 ## Architecture
@@ -38,6 +40,13 @@ Glass semantics to remember: later glass elements do not see content painted bet
 - `gen` is a reserved keyword in edition 2024, hence `serial`.
 - Tab bar and composer call `.occlude()` so pointer events do not reach the photo grid underneath.
 - The FPS badge counts frames actually painted (a `canvas` paint callback) over the active span, so it reads 0/stale when the app is idle; the app does not redraw when nothing animates.
+
+## PWA / startup
+
+- `www/manifest.webmanifest`, `www/icons/`, `www/sw.js`. The service worker precaches the shell, JS glue, wasm and icons (cache-first). The files are not content-hashed: **bump `VERSION` in `www/sw.js` whenever any precached file changes** (every rebuild of the wasm), otherwise installed clients keep the old app. A new worker activates immediately but the running page keeps the old files until the next launch.
+- `www/index.html` starts the wasm `fetch` in parallel with the JS import, shows a CSS launch screen (`#splash`) until the first frame, and logs `[boot]` timings to the console.
+- `serve.py` serves `.br`/`.gz` siblings with `Content-Encoding`. Rebuild with `build.sh` (not just cargo) so they are not stale. The release profile uses fat LTO, 1 codegen unit and `strip`, so a release build takes longer.
+- Service workers need a secure context (localhost or trusted HTTPS); on the iPhone with the self-signed cert they may not register. The built-in browser pane refuses to register one, so SW behavior needs a real browser.
 
 ## iOS / browser quirks
 

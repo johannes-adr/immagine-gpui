@@ -1,0 +1,37 @@
+// Precaches the app shell and the wasm bundle so launches never wait for the network.
+// Bump VERSION whenever any precached file changes (the files are not content-hashed).
+const VERSION = "v1";
+const CACHE = "reminders-" + VERSION;
+const ASSETS = [
+  "./",
+  "./index.html",
+  "./manifest.webmanifest",
+  "./pkg/gpui_web_demo.js",
+  "./pkg/gpui_web_demo_bg.wasm",
+  "./icons/icon-180.png",
+  "./icons/icon-192.png",
+  "./icons/icon-512.png",
+];
+
+self.addEventListener("install", (e) => {
+  e.waitUntil(
+    caches.open(CACHE)
+      .then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: "reload" }))))
+      .then(() => self.skipWaiting()),
+  );
+});
+
+self.addEventListener("activate", (e) => {
+  e.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim()),
+  );
+});
+
+self.addEventListener("fetch", (e) => {
+  if (e.request.method !== "GET") return;
+  e.respondWith(
+    caches.match(e.request, { ignoreSearch: true }).then((hit) => hit || fetch(e.request)),
+  );
+});
