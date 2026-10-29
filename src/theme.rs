@@ -12,6 +12,9 @@ pub(crate) struct Palette {
     pub(crate) separator: Rgba,
     pub(crate) glass_tint: Hsla,
     pub(crate) chip: Rgba,
+    pub(crate) bar_tint: Hsla,
+    pub(crate) tab_inactive: Rgba,
+    pub(crate) tab_thumb: Rgba,
 }
 
 impl Palette {
@@ -23,6 +26,9 @@ impl Palette {
                 separator: rgba(0xffffff26),
                 glass_tint: GLASS_TINT_DARK,
                 chip: rgba(0xffffff33),
+                bar_tint: Hsla { h: 0., s: 0., l: 0.1, a: 0.45 },
+                tab_inactive: rgba(0xffffffd9),
+                tab_thumb: rgba(0xffffff33),
             }
         } else {
             Self {
@@ -31,6 +37,9 @@ impl Palette {
                 separator: rgba(0x3c3c434a),
                 glass_tint: GLASS_TINT_LIGHT,
                 chip: rgba(0x0000001a),
+                bar_tint: Hsla { h: 0., s: 0., l: 1., a: 0.62 },
+                tab_inactive: rgba(0x000000b3),
+                tab_thumb: rgba(0xffffffcc),
             }
         }
     }
