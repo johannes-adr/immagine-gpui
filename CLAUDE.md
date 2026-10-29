@@ -1,0 +1,47 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+An iOS-style Reminders + Photos demo written with GPUI (via `gpui-kit`) and compiled to WebAssembly. There are no tests and no lint config; verification is done by loading the app in a browser or the iOS Simulator.
+
+## Commands
+
+```sh
+cargo install wasm-bindgen-cli --version 0.2.129   # must match the wasm-bindgen version in Cargo.lock
+./build.sh                                         # cargo build (wasm32, release) + wasm-bindgen into www/pkg/
+python3 serve.py                                   # http://localhost:8080 and https://<LAN-IP>:8443 (prints both)
+```
+
+- Needs **nightly** Rust (`rust-toolchain.toml`); stable fails inside the `wasm_thread` dependency.
+- If `serve.py` says "Address already in use", an old server holds the port: `lsof -ti tcp:8080 | xargs kill`.
+- `assets/Arial.ttf` and `assets/Arial-Bold.ttf` are git-ignored but `include_bytes!`'d in `src/lib.rs`; the build fails without them. The web platform ships no fonts and panics when none are loaded before the window opens.
+- Rebuild after any Rust or `vendor/` change; `www/index.html` changes need no rebuild.
+
+## Architecture
+
+**App (`src/lib.rs`, single file).** One root view `Todos` renders both tabs (`reminders_view`, `photos_view`), the glass tab bar, the photo viewer overlay and the FPS badge. The `web` module at the bottom is the wasm entry: `run(top, bottom, dark, webgpu)` loads fonts, then `open_window`s the view and keeps the `ApplicationHandle` in a thread-local. `www/index.html` passes safe-area insets, color scheme and `!!navigator.gpu`.
+
+**GPUI is vendored and patched** (`vendor/`, wired in `Cargo.toml` via `[patch.crates-io]`; versions must stay `0.3.10` because `gpui-kit` pins `=0.3.10`). GPUI has no backdrop blur or custom-shader hook, so the liquid-glass look is a renderer feature added here:
+
+- `vendor/gpui-pre` (`scene.rs`, `window.rs`): adds `GlassParams`/`GlassStyle` and `Window::paint_glass(bounds, style)`. It reuses the `PaintSurface` primitive (already z-ordered and batched, previously a no-op on WGPU) with a new `glass` field.
+- `vendor/gpui-pre-wgpu`: `glass.rs` + `glass.wgsl` + `glass_blit.wgsl`, hooked into `wgpu_renderer.rs` (`render_frame` creates/resizes the glass resources, `record_frame` handles the `Surfaces` batch). When a frame contains glass, everything is drawn into an offscreen texture; the backdrop is copied **once per frame** at the first glass batch; the offscreen texture is blitted to the real frame at the end.
+- The glass shader uses only a uniform buffer, texture and sampler so it runs on WebGPU **and** WebGL2. iOS before 26 has no WebGPU, so WebGL2 is the path real iPhones usually take; check both.
+- `vendor/gpui-pre-web` (`window.rs`): `MAX_RENDER_DPR = 2.0` caps the canvas backing-store scale (3x phones otherwise draw 2.25x the pixels).
+
+Glass semantics to remember: later glass elements do not see content painted between glass batches; glass ignores GPUI content masks (no clipping when partly scrolled out); children of `glass_div` paint after the glass and stay crisp. The glass layer is an absolute `canvas` and needs explicit `top_0().left_0()`, otherwise it is offset by the parent's padding.
+
+## GPUI patterns used here
+
+- `with_animation` playback is keyed by element id; replay by changing a generation counter in the id (`tab_gen`, `press_gen`/`serial`). Animator closures are `'static` and cannot borrow `self`, so copy values into them.
+- Photo viewer zoom: each grid tile has an absolute `canvas` that writes its bounds into a shared `Rc<RefCell<Vec<Bounds>>>`; `open_photo` reads them and `viewer_overlay` lerps from that rect to the full viewport. Closing flips the animation direction and a spawned timer clears `viewer` afterwards.
+- Row builders that capture `cx` return `AnyElement` (an `impl IntoElement` return borrows `cx` and fails to compile).
+- `gen` is a reserved keyword in edition 2024, hence `serial`.
+- Tab bar and composer call `.occlude()` so pointer events do not reach the photo grid underneath.
+- The FPS badge counts frames actually painted (a `canvas` paint callback) over the active span, so it reads 0/stale when the app is idle; the app does not redraw when nothing animates.
+
+## iOS / browser quirks
+
+- `www/index.html` pins `html, body` to `position: fixed; inset: 0; height: 100dvh`. Without it, Safari scrolls the document and collapses its toolbar, shifting the canvas and leaving a gap.
+- Safari WebGPU is secure-context only (`https` or `localhost`); `serve.py` generates a self-signed cert for the current LAN IP into `certs/` (git-ignored).
+- 60 FPS ceilings are browser/display limits, not GPUI: the web platform draws on `requestAnimationFrame` and `with_max_fps` is unset.
+- For iOS Simulator testing, `localhost` works directly; tap coordinates are in points (402x874 for the iPhone 16 Pro). In the desktop browser pane, click coordinates follow the screenshot's reported frame, not CSS pixels.
