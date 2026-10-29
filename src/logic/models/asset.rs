@@ -230,52 +230,20 @@ where
 }
 
 /// Duration as a display string. Accepts v3 milliseconds (a number) or a server string
-/// (`"0:00:12.345678"`, `"2:30"`). Anything else becomes `None`.
+/// (`"0:00:12.345678"`, `"2:30"`); an unparsable string is kept verbatim like in Swift.
+/// Any other JSON type becomes `None`.
 pub(crate) fn lenient_duration<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    use crate::logic::media_duration;
     let value = Option::<serde_json::Value>::deserialize(d)?;
     Ok(match value {
-        Some(serde_json::Value::Number(n)) => n
-            .as_f64()
-            .filter(|ms| ms.is_finite())
-            .map(|ms| duration_text((ms / 1000.0).round() as i64)),
+        Some(serde_json::Value::Number(n)) => {
+            n.as_f64().filter(|ms| ms.is_finite()).map(|ms| media_duration::text_from_milliseconds(ms.round() as i64))
+        }
         Some(serde_json::Value::String(s)) => {
-            parse_server_duration(&s).map(|secs| duration_text(secs.round() as i64))
+            Some(media_duration::text_from_server_string(&s).unwrap_or(s))
         }
         _ => None,
     })
-}
-
-/// `"h:mm:ss"`, `"m:ss"` with an optional fraction on the last part, in seconds.
-pub(crate) fn parse_server_duration(s: &str) -> Option<f64> {
-    let parts: Vec<&str> = s.trim().split(':').collect();
-    if !(2..=3).contains(&parts.len()) {
-        return None;
-    }
-    let last = parts.len() - 1;
-    let mut total = 0.0;
-    for (i, part) in parts.iter().enumerate() {
-        let value: f64 = if i == last {
-            part.parse().ok()?
-        } else {
-            part.parse::<u32>().ok()? as f64
-        };
-        if !value.is_finite() || value < 0.0 {
-            return None;
-        }
-        total = total * 60.0 + value;
-    }
-    Some(total)
-}
-
-/// `m:ss`, or `h:mm:ss` from one hour on. Negative values show as zero.
-pub(crate) fn duration_text(total_seconds: i64) -> String {
-    let s = total_seconds.max(0);
-    let (h, m, sec) = (s / 3600, (s % 3600) / 60, s % 60);
-    if h > 0 {
-        format!("{h}:{m:02}:{sec:02}")
-    } else {
-        format!("{m}:{sec:02}")
-    }
 }
 
 #[cfg(test)]
@@ -326,13 +294,10 @@ mod tests {
     }
 
     #[test]
-    fn duration_text_formats_and_clamps() {
-        assert_eq!(duration_text(0), "0:00");
-        assert_eq!(duration_text(-5), "0:00");
-        assert_eq!(duration_text(3725), "1:02:05");
-        assert_eq!(parse_server_duration("abc"), None);
-        assert_eq!(parse_server_duration("12"), None);
-        assert_eq!(parse_server_duration("1:2:3:4"), None);
-        assert_eq!(parse_server_duration("2:30"), Some(150.0));
+    fn unparsable_duration_string_is_kept() {
+        let a: Asset = serde_json::from_str(&SAMPLE_ASSET_JSON.replace("\"duration\":null", "\"duration\":\"abc\"")).unwrap();
+        assert_eq!(a.duration.as_deref(), Some("abc"));
+        let b: Asset = serde_json::from_str(&SAMPLE_ASSET_JSON.replace("\"duration\":null", "\"duration\":75000")).unwrap();
+        assert_eq!(b.duration.as_deref(), Some("1:15"));
     }
 }
