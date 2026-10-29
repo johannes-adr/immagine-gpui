@@ -17,7 +17,7 @@ if [ -z "$SKIP_BUILD" ]; then
   command -v wasm-opt >/dev/null || echo "Hinweis: 'brew install binaryen brotli' macht das Bundle kleiner (optional)."
   [ -f assets/Arial.ttf ] && [ -f assets/Arial-Bold.ttf ] || { echo "assets/Arial.ttf und Arial-Bold.ttf fehlen (siehe README, Abschnitt Fonts)"; exit 1; }
   [ -f assets/Arial.sub.ttf ] || ./subset-fonts.sh
-  ./build.sh
+  FAST=${FAST-1} ./build.sh   # quick dev build; FAST= ./serve.sh for the fully optimized one
 fi
 
 for port in 8080 8443; do
