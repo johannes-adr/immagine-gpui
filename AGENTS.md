@@ -93,5 +93,6 @@ Porting Robin's Immagine (`../immagine`, Swift/iOS, clone of github.com/RobinCod
 - The module is called `logic`, not `core`, to avoid clashing with the `core` crate.
 - `serve.py` proxies `/api/*` to `IMMICH_URL` (default `http://immich.server.local`), so the page is same-origin. Credentials for E2E come from the environment (`E2E_SERVER_URL`, `E2E_EMAIL`, `E2E_PASSWORD`), never from files in the repo.
 
+- Full knowledge dump of the port (architecture, Immich API, GPUI-web findings, performance numbers, gotchas, open items): `docs/immagine-wissensdump.md`.
 - **Simulator Safari keeps old ES modules** across reloads of the same tab: after a rebuild it may fail with `LinkError: import function ./gpui_web_demo_bg.js:__wbg_... must be callable` (stale JS glue, new wasm). `serve.py` now sends `Cache-Control: no-store`; if it still happens, `xcrun simctl terminate booted com.apple.mobilesafari` and reopen the URL (add `?x=N`).
 - Typing the Immich password into the app's login form is left to the user (the agent does not enter real passwords); to test the logged-in app in the browser pane, set `localStorage["immagine.token"]` from a `fetch('/api/auth/login')` response, the cookie comes with it. In the simulator there is no console, so the user logs in by hand once (the token persists in that Safari's localStorage).
