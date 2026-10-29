@@ -5,6 +5,8 @@ pub mod fetch;
 pub mod idb;
 pub mod image_loader;
 pub mod local_storage;
+pub mod pinch;
+pub mod video;
 pub mod selftest;
 
 /// `Date.now()` as the logic layer's clock.

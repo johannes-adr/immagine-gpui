@@ -23,7 +23,8 @@ image = { version = "0.25", default-features = false }
 web-sys = { version = "0.3", features = [
     "Window", "Request", "RequestInit", "RequestCredentials", "Response", "Headers", "Event", "EventTarget",
     "Location", "Storage", "console", "Performance", "ImageBitmap", "OffscreenCanvas",
-    "OffscreenCanvasRenderingContext2d", "ImageData", "Blob", "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbTransaction", "IdbTransactionMode",
+    "OffscreenCanvasRenderingContext2d", "ImageData", "Blob", "PointerEvent", "MouseEvent", "Document", "HtmlElement", "HtmlVideoElement",
+    "CssStyleDeclaration", "Node", "Element", "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbTransaction", "IdbTransactionMode",
     "IdbOpenDbRequest", "IdbRequest",
 ] }
 

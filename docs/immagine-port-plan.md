@@ -169,3 +169,12 @@ Phase 0 (1 Person)
 - `log_out` setzt jetzt Alben, Personen, Viewer und Tab zurück.
 - **Offen:** Alben: Favoriten-Kachel, Anlegen/Umbenennen/Löschen, Wisch-zurück, Virtualisierung der Kacheln, Cover-Berechnung bei jedem Sync. Personen: Namen/Geburtstag ändern, Zusammenführen, Ausblenden; Wisch-zurück. Beide: kein Viewer-Pinch, keine Info.
 - **Prozess:** neue Worktrees brauchen `assets/*.sub.ttf` (git-ignoriert) zum Bauen.
+
+## 18. Viewer-Funktionen (im Browser-Pane geprüft)
+
+- **Zoom** (`src/immagine/viewer.rs`): Doppeltipp (2,5×) und zurück, Trackpad-Pinch (Ctrl+Wheel), Zwei-Finger-Pinch (`web_adapters/pinch.rs`, Touch-Pointer-Events auf `window`, weil GPUIs Web-Plattform nur einzelne Zeiger liefert; mit synthetischen Pointer-Events geprüft, **nicht mit echten Fingern**), Ziehen zum Verschieben, Zoom-Punkt bleibt unter dem Finger. Ab Zoom 1,2 wird die `fullsize`-Rendition über die Vorschau gelegt (scharf), ab da keine Nachbarseiten.
+- **Favorit:** Chip „Favorit“ legt eine Outbox-Operation an (`engine.enqueue`), die Kachel/Liste ändert sich sofort, der nächste Sync sendet sie. Geprüft gegen den Server in beide Richtungen (am Ende wieder im Ausgangszustand).
+- **Info-Panel:** Chip „Info“ lädt den Asset-Datensatz und zeigt Datei, Aufnahmedatum, Kamera, Objektiv, Belichtung, Größe/Megapixel, Dateigröße (Formatierer aus `logic::models`).
+- **Video:** Chip „Abspielen“ legt ein DOM-`<video>` über das Canvas (`web_adapters/video.rs`, `/api/assets/<id>/video/playback`, Cookie-Auth, Range-Anfragen laufen durch den Proxy). Geprüft: 1280×720 spielt, Element verschwindet beim Schließen.
+- **Glas-Backdrop:** Die Tab-Bar wird ausgeblendet, solange der Viewer offen ist, damit das Glas des Viewers das Foto statt des Rasters spiegelt (Renderer kopiert den Backdrop einmal pro Frame am ersten Glas).
+- **Offen:** Videos nur über Chip (kein Auto-Start, kein Scrubber im Canvas), Teilen, Löschen/Papierkorb, Orts-Bearbeitung/Karte, Personen im Foto, Live Text, Wisch nach oben für Info, Snap-Back-Animation, Tastatursteuerung.

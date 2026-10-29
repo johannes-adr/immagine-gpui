@@ -67,6 +67,7 @@ pub(crate) struct Immagine {
     viewer: Option<viewer::Viewer>,
     viewer_serial: u32,
     thumbs: thumbs::SharedThumbs,
+    pinch: Option<crate::web_adapters::pinch::PinchHandle>,
     albums: albums::AlbumsState,
     people: people::PeopleState,
 }
@@ -123,6 +124,7 @@ impl Immagine {
             viewer: None,
             viewer_serial: 0,
             thumbs: thumbs::new(cx.weak_entity()),
+            pinch: None,
             albums: Default::default(),
             people: Default::default(),
         };
@@ -299,7 +301,9 @@ impl Render for Immagine {
             Screen::Timeline if self.tab == 1 => self.albums_view(&p, window, cx),
             Screen::Timeline => self.people_view(&p, window, cx),
         };
-        let chrome = (self.screen == Screen::Timeline).then(|| self.tab_bar(&p, cx));
+        // The renderer copies the glass backdrop once per frame at the first glass element; with the tab bar
+        // gone while the viewer is open, the viewer's own glass sees the photo instead of the grid.
+        let chrome = (self.screen == Screen::Timeline && self.viewer.is_none()).then(|| self.tab_bar(&p, cx));
         let viewer = if self.screen == Screen::Timeline { self.viewer_overlay(window, cx) } else { None };
         div()
             .size_full()
