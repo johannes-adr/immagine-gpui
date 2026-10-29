@@ -15,14 +15,33 @@ python3 serve.py                                   # dev: service worker disable
 
 - Needs **nightly** Rust (`rust-toolchain.toml`); stable fails inside the `wasm_thread` dependency.
 - If `serve.py` says "Address already in use", an old server holds the port: `lsof -ti tcp:8080 | xargs kill`.
-- `assets/Arial.ttf` and `assets/Arial-Bold.ttf` are git-ignored but `include_bytes!`'d in `src/lib.rs`; the build fails without them. The web platform ships no fonts and panics when none are loaded before the window opens.
+- `assets/Arial.ttf` and `assets/Arial-Bold.ttf` are git-ignored but `include_bytes!`'d in `src/web.rs`; the build fails without them. The web platform ships no fonts and panics when none are loaded before the window opens.
 - `build.sh` also runs `wasm-opt -O3` (binaryen) and precompresses wasm/js to `.br`/`.gz`; `brew install binaryen brotli`. Do not use `wasm-opt --all-features` (produces wasm browsers reject: "unknown import kind"); the explicit `--enable-*` list incl. `--enable-threads` is required.
 - `assets/*.sub.ttf` (what the build embeds) are Latin subsets of the Arial files, made by `./subset-fonts.sh` (needs fonttools); they are git-ignored like the originals.
 - Rebuild after any Rust or `vendor/` change; `www/index.html` changes need no rebuild.
 
 ## Architecture
 
-**App (`src/lib.rs`, single file).** One root view `Todos` renders both tabs (`reminders_view`, `photos_view`), the glass tab bar, the photo viewer overlay and the FPS badge. The `web` module at the bottom is the wasm entry: `run(top, bottom, dark, webgpu)` loads fonts, then `open_window`s the view and keeps the `ApplicationHandle` in a thread-local. `www/index.html` passes safe-area insets, color scheme and `!!navigator.gpu`.
+**App (`src/`), organised by the nesting of the UI.**
+
+```
+src/
+  lib.rs              module list only
+  web.rs              wasm entry: run(top, bottom, dark, webgpu) loads fonts, opens the window,
+                      keeps the ApplicationHandle in a thread-local
+  theme.rs            colors, glass tints, Palette (light/dark)
+  util.rs             lerp, anim, spring_out, now_ms
+  components/         reusable building blocks
+    glass.rs            glass_div (liquid glass via Window::paint_glass)
+    photo.rs            generated "photo" (gradient, sun, hills)
+    fps.rs              FpsMeter and the FPS badge
+  app/                root view `Todos`: state, tab switching, background, Render
+    tab_bar.rs          floating glass tab bar
+    reminders/          Reminders tab: header, list, composer (mod.rs), one row (row.rs)
+    photos/             Photos tab: grid with press-grow (mod.rs), full-screen zoom overlay (viewer.rs)
+```
+
+All tab code is `impl Todos` split across the child modules of `app`; the struct's private fields are visible to every descendant module, so methods that cross module boundaries are `pub(crate)`. `www/index.html` passes safe-area insets, color scheme and `!!navigator.gpu` to `run`.
 
 **GPUI is vendored and patched** (`vendor/`, wired in `Cargo.toml` via `[patch.crates-io]`; versions must stay `0.3.10` because `gpui-kit` pins `=0.3.10`). GPUI has no backdrop blur or custom-shader hook, so the liquid-glass look is a renderer feature added here:
 
