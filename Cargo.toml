@@ -21,7 +21,7 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "Window", "Request", "RequestInit", "RequestCredentials", "Response", "Headers", "Event", "EventTarget",
-    "Location", "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbTransaction", "IdbTransactionMode",
+    "Location", "Storage", "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbTransaction", "IdbTransactionMode",
     "IdbOpenDbRequest", "IdbRequest",
 ] }
 

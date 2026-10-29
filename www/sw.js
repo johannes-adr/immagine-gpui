@@ -1,7 +1,7 @@
 // Precaches the app shell and the wasm bundle so launches never wait for the network.
 // Bump VERSION whenever any precached file changes (the files are not content-hashed).
-const VERSION = "v8";
-const CACHE = "reminders-" + VERSION;
+const VERSION = "v9";
+const CACHE = "immagine-" + VERSION;
 const ASSETS = [
   "./",
   "./index.html",

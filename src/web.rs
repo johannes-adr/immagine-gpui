@@ -1,4 +1,4 @@
-use crate::app::Todos;
+use crate::immagine::Immagine;
 use gpui_kit::*;
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -29,7 +29,7 @@ pub fn run(top: f32, bottom: f32, dark: bool, webgpu: bool) {
             );
         }
         gpui_kit::open_window(WindowOptions::default(), cx, move |window, cx| {
-            cx.new(|cx| Todos::new(top, bottom, dark, webgpu, window, cx))
+            cx.new(|cx| Immagine::new(top, bottom, dark, webgpu, window, cx))
         })
         .expect("failed to open window");
     });

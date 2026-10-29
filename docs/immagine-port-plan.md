@@ -134,3 +134,15 @@ Phase 0 (1 Person)
 - **B2 Adapter** (`src/web_adapters/`, nur wasm): `FetchTransport` (fetch, Cookies same-origin), IndexedDB-Key-Value (`idb::put/get`), `WebClock`, `selftest`/`sync_selftest` (aus der Konsole aufrufbar).
 - **Gegen den echten Server geprüft** (Browser-Pane, Login per Cookie über den Proxy): Full Sync 26 377 Assets + 12 Alben in ~4,8 s, danach inkrementeller Lauf in ~50 ms; Snapshot-Roundtrip über IndexedDB (100 Assets: 74 KB) stimmt. Snapshot für alle 26k Assets noch nicht gemessen (grob ~20 MB JSON, Schreiben/Laden prüfen).
 - Offen für Welle C: Thumbnail-Queue (Prio, Abbruch), Snapshot-Persistenz im App-Ablauf (Start: restore, Ende: put), Login-Screen, Raster/Viewer.
+
+## 14. Stand Welle C, Teil 1: Login und Timeline (im Browser-Pane geprüft)
+
+- Neues Root `src/immagine/` (`Immagine`-View) ersetzt die Demo als Startansicht (`src/app/` bleibt vorerst als Spender für Glas-/Tab-Bar-Code, `#[allow(dead_code)]`).
+- **Login:** E-Mail/Passwort (maskiert), Token in `localStorage` (`immagine.token`), Cookie vom Proxy für `img()`. Das Tippen im Formular ist noch nicht im Browser-Pane getestet; der Test lief mit per `fetch` gesetztem Token.
+- **Start:** gespeicherten Store-Snapshot aus IndexedDB laden, Timeline sofort zeigen, danach Sync im Hintergrund; Snapshot nur bei Änderungen zurückschreiben. 401 → Abmelden.
+- **Timeline:** `uniform_list` (virtualisiert), Spalten nach Breite (3–8), `img(thumbnail)` mit `ObjectFit::Cover`. 24 942 echte Fotos, Scrollen funktioniert (37–47 FPS im Pane, Worst-Frame 56–90 ms).
+- **Bekannte Probleme:**
+  1. Erster Frame erst nach ~3 s (mit Snapshot) bzw. ~8 s (erster Full Sync): Sync und JSON-Parsing blockieren den Hauptthread. Lösung: in Chunks mit `yield` aufteilen oder Sync in einen Worker.
+  2. GPUIs Asset-Cache behält dekodierte Thumbnails; bei langem Scrollen wächst der Speicher. Lösung: eigener LRU-Image-Cache (`rendition_cache`) / `RetainAllImageCache`-Ersatz.
+  3. Schlechte Frame-Zeiten beim Dekodieren (Worst-Frame bis 90 ms).
+  4. Kein Platzhalter aus Thumbhash, kein Tab-Bar, kein Viewer, keine Alben/Personen.

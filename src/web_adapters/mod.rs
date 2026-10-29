@@ -3,6 +3,7 @@
 
 pub mod fetch;
 pub mod idb;
+pub mod local_storage;
 pub mod selftest;
 
 /// `Date.now()` as the logic layer's clock.

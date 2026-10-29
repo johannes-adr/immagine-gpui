@@ -1,6 +1,6 @@
 {
-  "name": "Reminders",
-  "short_name": "Reminders",
+  "name": "Immagine",
+  "short_name": "Immagine",
   "description": "iOS-style Reminders and Photos, built with GPUI and WebAssembly",
   "start_url": "./",
   "scope": "./",
