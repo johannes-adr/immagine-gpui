@@ -11,7 +11,7 @@ use crate::logic::models::asset::Asset;
 use crate::logic::models::asset_details::InfoFormat;
 use crate::logic::models::asset_info::AssetInfoFormat;
 use crate::logic::models::timeline::TimelineItem;
-use crate::theme::{BLUE, GLASS_TINT_DARK};
+use crate::theme::{BLUE, GLASS_TINT_DARK, RED};
 use crate::util::{anim, lerp};
 use crate::web_adapters::fetch::FetchTransport;
 use crate::web_adapters::pinch::{self, Pinch};
@@ -508,7 +508,7 @@ impl Immagine {
                         }),
                 )
                 .children(info_panel)
-                .child(
+                .children((!closing).then(|| {
                     div()
                         .absolute()
                         .bottom(px(bottom + 40.))
@@ -517,7 +517,14 @@ impl Immagine {
                         .justify_center()
                         .gap_3()
                         .child(
-                            chip("viewer-fav", if favorite { "Favorit (an)".into() } else { "Favorit".into() }, if favorite { rgb(BLUE).into() } else { rgb(0xffffff).into() })
+                            glass_div(GLASS_TINT_DARK, 18.)
+                                .id("viewer-fav")
+                                .h(px(36.))
+                                .w(px(48.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(heart(favorite))
                                 .on_click(cx.listener(|this, _, _, cx| this.toggle_favorite(cx))),
                         )
                         .child(
@@ -526,9 +533,9 @@ impl Immagine {
                         )
                         .children(
                             (is_video && !playing).then(|| chip("viewer-play", "Abspielen".into(), rgb(0xffffff).into()).on_click(cx.listener(|this, _, _, cx| this.play_video(cx)))),
-                        ),
-                )
-                .child(
+                        )
+                }))
+                .children((!closing).then(|| {
                     glass_div(GLASS_TINT_DARK, 18.)
                         .id("viewer-done")
                         .absolute()
@@ -541,9 +548,34 @@ impl Immagine {
                         .text_color(rgb(0xffffff))
                         .text_size(px(17.))
                         .child("Fertig")
-                        .on_click(cx.listener(|this, _, _, cx| this.close_viewer(cx))),
-                )
+                        .on_click(cx.listener(|this, _, _, cx| this.close_viewer(cx)))
+                }))
                 .into_any_element(),
         )
     }
+}
+
+/// A heart, filled red when `filled`, otherwise a white outline (the font has no heart glyph).
+fn heart(filled: bool) -> Canvas<()> {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let (x, y): (f32, f32) = (bounds.origin.x.into(), bounds.origin.y.into());
+            let k = f32::from(bounds.size.width) / 24.;
+            let at = |px_: f32, py_: f32| point(px(x + px_ * k), px(y + py_ * k));
+            let mut b = if filled { PathBuilder::fill() } else { PathBuilder::stroke(px(1.8)) };
+            b.move_to(at(12., 21.5));
+            b.curve_to(at(2.2, 8.2), at(2., 14.5));
+            b.curve_to(at(7.2, 3.), at(2.5, 3.));
+            b.curve_to(at(12., 6.8), at(10.8, 3.));
+            b.curve_to(at(16.8, 3.), at(13.2, 3.));
+            b.curve_to(at(21.8, 8.2), at(21.5, 3.));
+            b.curve_to(at(12., 21.5), at(22., 14.5));
+            b.close();
+            if let Ok(path) = b.build() {
+                window.paint_path(path, if filled { rgb(RED) } else { rgb(0xffffff) });
+            }
+        },
+    )
+    .size(px(22.))
 }

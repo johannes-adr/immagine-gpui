@@ -310,7 +310,8 @@ impl Render for Immagine {
         };
         // The renderer copies the glass backdrop once per frame at the first glass element; with the tab bar
         // gone while the viewer is open, the viewer's own glass sees the photo instead of the grid.
-        let chrome = (self.screen == Screen::Timeline && self.viewer.is_none()).then(|| self.tab_bar(&p, window, cx));
+        let viewer_open = self.viewer.as_ref().is_some_and(|v| !v.closing);
+        let chrome = (self.screen == Screen::Timeline && !viewer_open).then(|| self.tab_bar(&p, window, cx));
         let viewer = if self.screen == Screen::Timeline { self.viewer_overlay(window, cx) } else { None };
         div()
             .size_full()
