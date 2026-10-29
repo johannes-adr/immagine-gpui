@@ -41,6 +41,19 @@
   <script type="module">
     // Start the wasm download right away, in parallel with the JS glue module.
     const t0 = performance.now();
+    // Installed iOS PWA: dvh/vh/% can stop short of the home-indicator area (WebKit bugs 237961,
+    // 254868, 292603), so size the page from the physical screen instead.
+    if (navigator.standalone || matchMedia("(display-mode: standalone)").matches) {
+      const fit = () => {
+        const portrait = innerHeight >= innerWidth;
+        const long = Math.max(screen.width, screen.height), short = Math.min(screen.width, screen.height);
+        const h = portrait ? long : short;
+        for (const el of [document.documentElement, document.body]) el.style.height = Math.max(h, innerHeight) + "px";
+      };
+      fit();
+      addEventListener("resize", fit);
+      addEventListener("orientationchange", () => setTimeout(fit, 100));
+    }
     const wasm = fetch(new URL("./pkg/gpui_web_demo_bg.wasm", import.meta.url));
     const log = (m) => console.log(`[boot] ${m} +${Math.round(performance.now() - t0)}ms (since nav ${Math.round(performance.now())}ms)`);
     try {
