@@ -1520,6 +1520,8 @@ impl WgpuRendererCore {
             _ => frame_view.clone(),
         };
 
+        let mut backdrop_copied = false;
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main_pass"),
@@ -1629,24 +1631,30 @@ impl WgpuRendererCore {
                         if !has_glass {
                             continue;
                         }
-                        drop(pass);
-                        if let Some(glass) = self.resources().glass.as_ref() {
-                            glass.copy_backdrop(&mut encoder);
+                        // Snapshot the backdrop once per frame: a full-screen copy per glass batch
+                        // is costly on mobile GPUs. Later glass sees what was painted before the
+                        // first glass batch, which is what a lens over the content should show.
+                        if !backdrop_copied {
+                            backdrop_copied = true;
+                            drop(pass);
+                            if let Some(glass) = self.resources().glass.as_ref() {
+                                glass.copy_backdrop(&mut encoder);
+                            }
+                            pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("glass_pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &target_view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Load,
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                    depth_slice: None,
+                                })],
+                                depth_stencil_attachment: None,
+                                ..Default::default()
+                            });
                         }
-                        pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("glass_pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &target_view,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Load,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                                depth_slice: None,
-                            })],
-                            depth_stencil_attachment: None,
-                            ..Default::default()
-                        });
                         if let Some(glass) = self.resources().glass.as_ref() {
                             for surface in &scene.surfaces[range] {
                                 glass.draw(

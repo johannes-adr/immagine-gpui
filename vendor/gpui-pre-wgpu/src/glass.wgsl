@@ -43,16 +43,22 @@ fn tap(px: vec2<f32>) -> vec3<f32> {
     return textureSampleLevel(backdrop, samp, uv, 0.0).rgb;
 }
 
-// Golden-angle spiral blur, one tap set per color channel so dispersion can split them.
-const TAPS: i32 = 20;
+// Golden-angle spiral blur. The spiral is rotated per pixel (interleaved gradient noise) so
+// the sparse taps turn into fine grain instead of visible ghost copies.
+const TAPS: i32 = 12;
+
+fn noise(p: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
+}
 
 fn blurred(center: vec2<f32>, radius: f32) -> vec3<f32> {
     var acc = vec3<f32>(0.0, 0.0, 0.0);
     var wsum = 0.0;
     let sigma2 = max(radius * radius * 0.35, 0.0001);
+    let rot = noise(center) * 6.2831853;
     for (var i = 0; i < TAPS; i = i + 1) {
         let fi = f32(i);
-        let a = fi * 2.39996323;
+        let a = fi * 2.39996323 + rot;
         let r = sqrt((fi + 0.5) / f32(TAPS)) * radius;
         let w = exp(-(r * r) / (2.0 * sigma2));
         acc = acc + tap(center + vec2<f32>(cos(a), sin(a)) * r) * w;
@@ -88,12 +94,8 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // The rim pulls in what lies just outside the glass, squeezed into the bezel.
     let shift = n * bend * P.shape.y;
 
-    let blur = P.misc.w;
-    let disp = P.shape.z * bend * 6.0;
-    var col: vec3<f32>;
-    col.r = blurred(in.px + shift * (1.0 + P.shape.z), blur).r;
-    col.g = blurred(in.px + shift, blur).g;
-    col.b = blurred(in.px + shift * (1.0 - P.shape.z), blur).b;
+    // One blur of the refracted backdrop (the old per-channel dispersion cost 3x the taps).
+    var col = blurred(in.px + shift, P.misc.w);
 
     // Vibrancy: saturate and lift, as the system material does.
     let luma = dot(col, vec3<f32>(0.299, 0.587, 0.114));
