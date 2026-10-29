@@ -10,9 +10,13 @@ A small iOS-style todo and photo app built with GPUI, compiled to WebAssembly.
 ## Run
 
 ```sh
-cargo install wasm-bindgen-cli --version 0.2.129
-./build.sh && python3 serve.py
+./serve.sh
 ```
+
+Checks the tools (installs `wasm-bindgen-cli` if missing), builds the wasm app and serves `www/` on `0.0.0.0`:
+HTTPS on `:8443` (self-signed cert for your LAN IP, use this on the phone) and HTTP on `:8080`. It frees the
+ports first. `SKIP_BUILD=1 ./serve.sh` serves without rebuilding; `IMMICH_URL=...` points the `/api` proxy at
+your Immich server. Manual steps: `./build.sh` then `python3 serve.py`.
 
 Needs nightly Rust (see `rust-toolchain.toml`).
 
