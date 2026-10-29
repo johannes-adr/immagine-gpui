@@ -9,7 +9,8 @@ An iOS-style Reminders + Photos demo written with GPUI (via `gpui-kit`) and comp
 ```sh
 cargo install wasm-bindgen-cli --version 0.2.129   # must match the wasm-bindgen version in Cargo.lock
 ./build.sh                                         # cargo build (wasm32, release) + wasm-bindgen into www/pkg/
-python3 serve.py                                   # http://localhost:8080 and https://<LAN-IP>:8443 (prints both)
+python3 serve.py                                   # dev: service worker disabled (kill-switch). PWA=1 python3 serve.py for the real one
+# http://localhost:8080 and https://<LAN-IP>:8443 (prints both)
 ```
 
 - Needs **nightly** Rust (`rust-toolchain.toml`); stable fails inside the `wasm_thread` dependency.

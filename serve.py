@@ -3,9 +3,27 @@ import http.server, os, socket, socketserver, ssl, subprocess, threading
 HTTP_PORT, HTTPS_PORT = 8080, 8443
 CERT_DIR = "certs"
 
+# Dev default: serve a service worker that deletes its caches and unregisters itself, so every reload
+# gets fresh files. `PWA=1 python3 serve.py` serves the real, caching sw.js instead.
+PWA = os.environ.get("PWA") == "1"
+KILL_SW = b"""self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (e) => e.waitUntil((async () => {
+  for (const k of await caches.keys()) await caches.delete(k);
+  await self.registration.unregister();
+  for (const c of await self.clients.matchAll()) c.navigate(c.url);
+})()));
+"""
+
 class H(http.server.SimpleHTTPRequestHandler):
     extensions_map = {**http.server.SimpleHTTPRequestHandler.extensions_map, ".wasm": "application/wasm"}
     def send_head(self):
+        if not PWA and self.path.split("?")[0] == "/sw.js":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/javascript")
+            self.send_header("Content-Length", str(len(KILL_SW)))
+            self.end_headers()
+            self.wfile.write(KILL_SW)
+            return None
         # Serve precompressed <file>.br / <file>.gz (written by build.sh) when the client accepts them.
         path = self.translate_path(self.path)
         accept = self.headers.get("Accept-Encoding", "")
@@ -70,6 +88,7 @@ ctx.load_cert_chain(cert, key)
 https_server.socket = ctx.wrap_socket(https_server.socket, server_side=True)
 
 serve(http_server)
+print("Service worker: " + ("real (PWA=1)" if PWA else "disabled (set PWA=1 to enable)"))
 print(f"Desktop: http://localhost:{HTTP_PORT}")
 print(f"iPhone:  https://{ip}:{HTTPS_PORT}   (same Wi-Fi; accept the certificate warning)", flush=True)
 try:
