@@ -2543,6 +2543,7 @@ version = "0.1.0"
 dependencies = [
  "futures-lite",
  "gpui-kit",
+ "image",
  "js-sys",
  "serde",
  "serde_json",

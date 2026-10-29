@@ -5,6 +5,7 @@
 
 mod login;
 mod tab_bar;
+mod thumbs;
 mod timeline;
 mod viewer;
 
@@ -14,7 +15,7 @@ use crate::logic::models::timeline::TimelineItem;
 use crate::logic::store::{MemoryStore, Store};
 use crate::logic::sync::engine::SyncEngine;
 use crate::theme::Palette;
-use crate::web_adapters::{fetch::FetchTransport, idb, local_storage, WebClock};
+use crate::web_adapters::{fetch::FetchTransport, idb, local_storage, mark, WebClock};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 use std::cell::RefCell;
@@ -63,6 +64,7 @@ pub(crate) struct Immagine {
     tile_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     viewer: Option<viewer::Viewer>,
     viewer_serial: u32,
+    thumbs: thumbs::SharedThumbs,
 }
 
 impl Immagine {
@@ -116,6 +118,7 @@ impl Immagine {
             tile_bounds: Rc::new(RefCell::new(HashMap::new())),
             viewer: None,
             viewer_serial: 0,
+            thumbs: thumbs::new(cx.weak_entity()),
         };
         this.resume(cx);
         this
@@ -141,12 +144,20 @@ impl Immagine {
         };
         self.token = token;
         cx.spawn(async move |this, cx| {
-            let store = match idb::get(DB, SNAPSHOT_KEY).await {
-                Ok(Some(bytes)) => MemoryStore::restore(&bytes).unwrap_or_else(|_| MemoryStore::new()),
+            mark("resume: start");
+            let bytes = idb::get(DB, SNAPSHOT_KEY).await;
+            mark("resume: snapshot read");
+            let store = match bytes {
+                Ok(Some(bytes)) => {
+                    mark(&format!("resume: restoring {} bytes", bytes.len()));
+                    MemoryStore::restore(&bytes).unwrap_or_else(|_| MemoryStore::new())
+                }
                 _ => MemoryStore::new(),
             };
+            mark("resume: restored");
             let _ = this.update(cx, |t, cx| {
                 t.install_engine(store, cx);
+                mark("resume: engine installed (timeline built)");
                 t.sync(cx);
             });
         })
@@ -228,13 +239,16 @@ impl Immagine {
         let token = self.token.clone();
         cx.notify();
         cx.spawn(async move |this, cx| {
+            mark("sync: start");
             let outcome = engine.sync(&token).await;
+            mark("sync: engine.sync done");
             let changed = match &outcome {
                 Ok(run) => run.full_sync || run.stream.assets_changed,
                 Err(_) => false,
             };
             let items = changed.then(|| engine.store().fetch_timeline());
             let snapshot = if changed { engine.store().snapshot().ok() } else { None };
+            mark("sync: timeline + snapshot built");
             let _ = this.update(cx, |t, cx| {
                 t.engine = Some(engine);
                 t.syncing = false;
@@ -253,6 +267,7 @@ impl Immagine {
             });
             if let Some(bytes) = snapshot {
                 let _ = idb::put(DB, SNAPSHOT_KEY, &bytes).await;
+                mark("sync: snapshot stored");
             }
         })
         .detach();

@@ -1,6 +1,6 @@
 //! Timeline: all photos newest first, a virtualized grid of server thumbnails.
 
-use super::Immagine;
+use super::{thumbs, Immagine};
 use crate::theme::Palette;
 use gpui_kit::*;
 
@@ -18,21 +18,33 @@ impl Immagine {
         let origin = self.origin.clone();
         let placeholder = p.chip;
         let view = cx.weak_entity();
+        let store = self.thumbs.clone();
         let bounds_map = self.tile_bounds.clone();
-        let list = uniform_list("timeline", rows + 1, move |range, _, _| {
+        let list = uniform_list("timeline", rows + 1, move |range, window, cx| {
+            store.borrow_mut().begin_frame();
+            for evicted in store.borrow_mut().take_evicted() {
+                let _ = window.drop_image(evicted);
+            }
             range
                 .map(|row| {
                     let tiles = (0..columns).filter_map(|c| items.get(row * columns + c).map(|item| (row * columns + c, item))).map(|(idx, item)| {
                         let view = view.clone();
+                        let store = store.clone();
                         let bounds_map = bounds_map.clone();
-                        let url = format!("{origin}/api/assets/{}/thumbnail?size=thumbnail", item.id);
+                        let key = format!("t:{}", item.id);
+                        let loaded = thumbs::get(&store, &key, || format!("{origin}/api/assets/{}/thumbnail?size=thumbnail", item.id), cx);
+                        let picture = match (loaded, item.thumbhash.as_deref()) {
+                            (Some(image), _) => Some(image),
+                            (None, Some(hash)) => thumbs::placeholder(&store, &item.id, hash),
+                            (None, None) => None,
+                        };
                         div()
                             .id(("tile", idx))
                             .relative()
                             .size(px(cell))
                             .flex_none()
                             .bg(placeholder)
-                            .child(img(SharedUri::from(url)).size_full().object_fit(ObjectFit::Cover))
+                            .children(picture.map(|image| img(image).size_full().object_fit(ObjectFit::Cover)))
                             .child(
                                 canvas(
                                     move |bounds, _, _| {

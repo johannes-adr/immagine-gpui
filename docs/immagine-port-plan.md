@@ -153,3 +153,10 @@ Phase 0 (1 Person)
 - **Viewer** (`src/immagine/viewer.rs`): Zoom aus der angetippten Kachel (Kachel-Bounds über ein `canvas` pro Kachel in `tile_bounds`), Wischen links/rechts zum Blättern (Nachbarseiten werden vorgeladen), Wischen nach unten oder „Fertig“ schließt. Jede Seite legt die schon geladene Grid-Vorschau unter das `preview`-Bild (Platzhalter ohne Sprung). Geprüft: öffnen (5 von 24 942), blättern (→ 6), Wisch-nach-unten-Schließen, Tab-Wechsel.
 - **Nicht umgesetzt im Viewer:** Pinch-/Doppeltipp-Zoom, Original statt Vorschau, Video-Wiedergabe, Filmstreifen, Teilen/Favorit/Info/Löschen, Snap-Back-Animation beim Abbrechen eines Wischs, Tastatursteuerung.
 - Muster für Views, die `cx` brauchen: Rückgabetyp `AnyElement` (sonst Borrow-Fehler), Klick-Handler in `uniform_list`-Closures über `cx.weak_entity()`.
+
+## 16. Performance (Browser-Pane, WebGPU)
+
+- **Start war nie das Problem:** Mit gespeichertem Snapshot (19,7 MB) dauert Restore 37 ms, der erste Frame ~110 ms, ein inkrementeller Sync ~300 ms. Die 3–8 s aus Abschnitt 14 waren der **erste** Full Sync (einmalig, blockiert die Seite ~4,8 s). Offen: Full Sync in Chunks mit `yield` oder im Worker.
+- **Bild-Pipeline neu** (`src/immagine/thumbs.rs`, `web_adapters/image_loader.rs`): `fetch` → `createImageBitmap` → `OffscreenCanvas.getImageData` → `RenderImage` (BGRA). Der Browser dekodiert nativ statt der `image`-Crate im WASM-Hauptthread. Dazu: max. 6 gleichzeitige Ladevorgänge, neueste Frames zuerst, veraltete Anfragen (aus dem Bild gescrollt) werden verworfen, LRU mit 160-MB-Budget für dekodierte Pixel, ausgeworfene Bilder werden per `Window::drop_image` aus dem Atlas entfernt. Thumbhash-Platzhalter (`logic::thumbhash`) füllen Kacheln bis zum Bild.
+- **Messung** (gleicher Browser-Pane, Foto-Raster scrollen): vorher 37–47 FPS, Worst-Frame 56–90 ms; nachher 55–61 FPS, Worst-Frame 19–33 ms, auch nach 300 schnellen Wheel-Events (~7 000 Zeilen weit). JS-Heap 11 MB. WASM-Speicher und iPhone-Verhalten nicht gemessen.
+- Viewer-Seiten (Raster-Thumbnail + `preview`) laufen durch dieselbe Pipeline.

@@ -2,11 +2,13 @@
 //! swipe down or "Fertig" to close. Pages use the grid thumbnail (already loaded) as a stand-in
 //! until the larger preview arrives.
 
-use super::Immagine;
+use super::{thumbs, Immagine};
 use crate::components::glass::glass_div;
 use crate::theme::GLASS_TINT_DARK;
 use crate::util::{anim, lerp};
 use gpui_kit::*;
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// A swipe farther than this fraction of the screen width turns the page.
@@ -101,7 +103,7 @@ impl Immagine {
         cx.notify();
     }
 
-    pub(super) fn viewer_overlay(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn viewer_overlay(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let v = self.viewer.as_ref()?;
         let vs = window.viewport_size();
         let (vw, vh): (f32, f32) = (vs.width.into(), vs.height.into());
@@ -116,17 +118,25 @@ impl Immagine {
         let top = self.top.max(12.);
         let count = items.len();
         
+        // Decoded images for the visible page and its neighbours (loads are queued by the store).
+        let store = self.thumbs.clone();
+        store.borrow_mut().begin_frame();
+        for evicted in store.borrow_mut().take_evicted() {
+            let _ = window.drop_image(evicted);
+        }
+        let mut pictures: HashMap<usize, (Option<Arc<RenderImage>>, Option<Arc<RenderImage>>)> = HashMap::new();
+        for k in index.saturating_sub(1)..=(index + 1).min(count.saturating_sub(1)) {
+            let Some(item) = items.get(k) else { continue };
+            let thumb = thumbs::get(&store, &format!("t:{}", item.id), || format!("{origin}/api/assets/{}/thumbnail?size=thumbnail", item.id), cx);
+            let preview = thumbs::get(&store, &format!("p:{}", item.id), || format!("{origin}/api/assets/{}/thumbnail?size=preview", item.id), cx);
+            pictures.insert(k, (thumb, preview));
+        }
         let page = move |k: usize| -> Option<AnyElement> {
-            let item = items.get(k)?;
-            let thumb = format!("{origin}/api/assets/{}/thumbnail?size=thumbnail", item.id);
-            let preview = format!("{origin}/api/assets/{}/thumbnail?size=preview", item.id);
-            Some(
-                div()
-                    .size_full()
-                    .child(img(SharedUri::from(thumb)).absolute().size_full().object_fit(ObjectFit::Contain))
-                    .child(img(SharedUri::from(preview)).absolute().size_full().object_fit(ObjectFit::Contain))
-                    .into_any_element(),
-            )
+            let (thumb, preview) = pictures.get(&k)?;
+            let layer = |image: &Option<Arc<RenderImage>>| {
+                image.clone().map(|i| img(i).absolute().size_full().object_fit(ObjectFit::Contain))
+            };
+            Some(div().size_full().children(layer(thumb)).children(layer(preview)).into_any_element())
         };
         let date = self.items.get(index).map(|i| i.date_bucket.clone()).unwrap_or_default();
 
