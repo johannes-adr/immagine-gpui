@@ -15,5 +15,6 @@ pub mod models;
 pub mod ports;
 pub mod rendition_cache;
 pub mod store;
+pub mod sync;
 pub mod thumbhash;
 pub mod viewer_images;
