@@ -87,6 +87,8 @@ pub(super) struct Viewer {
     release: Option<Release>,
     snap_id: u32,
     snap: Option<Snap>,
+    /// A drag just ended: the next render cancels the scroll coast GPUI starts from the same finger.
+    stop_momentum: Cell<bool>,
     zoom: f32,
     pan: (f32, f32),
     /// Two fingers are down: single-pointer drags are ignored.
@@ -169,6 +171,7 @@ impl Immagine {
             release: None,
             snap_id: 0,
             snap: None,
+            stop_momentum: Cell::new(false),
             zoom: 1.,
             pan: (0., 0.),
             pinching: false,
@@ -268,6 +271,7 @@ impl Immagine {
             return;
         }
         let mode = std::mem::replace(&mut v.mode, DragMode::None);
+        v.stop_momentum.set(true);
         if v.zoom > 1. {
             cx.notify();
             return;
@@ -495,6 +499,9 @@ impl Immagine {
         let (vw, vh): (f32, f32) = (vs.width.into(), vs.height.into());
         v.viewport.set((vw, vh));
         let (index, closing, dx, dy, zoom, pan) = (v.index, v.closing, v.dx, v.dy, v.zoom, v.pan);
+        if v.stop_momentum.replace(false) {
+            window.cancel_touch_momentum();
+        }
         let (mut ds, anchor, release) = (v.ds, v.anchor, v.release);
         let (mut dx, mut dy) = (dx, dy);
         let now = now_ms();

@@ -1045,6 +1045,11 @@ impl TouchGestureRecognizer {
         };
     }
 
+    /// Drops a running post-fling coast (the content it scrolled is gone or handled by someone else).
+    pub(crate) fn cancel_momentum(&mut self) {
+        self.momentum = None;
+    }
+
     pub(crate) fn has_momentum(&self) -> bool {
         self.momentum.is_some()
     }

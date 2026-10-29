@@ -5879,6 +5879,12 @@ impl Window {
     /// Sets whether recognized touch pans may use the platform's predicted
     /// touch positions. Disabling drops [`TouchEvent::predicted_position`]
     /// before gesture recognition, so pans track only raw touch positions.
+    /// Stops the scroll coast that follows a flinging touch, e.g. when an overlay that took the drag closes
+    /// and the page below must not inherit it.
+    pub fn cancel_touch_momentum(&mut self) {
+        self.touch_gestures.cancel_momentum();
+    }
+
     /// True while a tap that only stopped a scrolling fling is being dispatched. Scrolled content should not
     /// treat it as a selection; controls outside the content should.
     pub fn tap_caught_fling(&self) -> bool {
