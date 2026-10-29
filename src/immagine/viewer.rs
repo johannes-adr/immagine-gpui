@@ -208,8 +208,18 @@ impl Immagine {
         if v.closing {
             return;
         }
+        if v.covering {
+            // The page below is not rendered yet: bring it back first and start closing a few frames later.
+            v.covering = false;
+            cx.notify();
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(Duration::from_millis(80)).await;
+                this.update(cx, |t, cx| t.close_viewer(cx)).ok();
+            })
+            .detach();
+            return;
+        }
         v.closing = true;
-        v.covering = false;
         v.start = None;
         v.video = None;
         v.zoom = 1.;
@@ -260,6 +270,11 @@ impl Immagine {
             let (ddx, ddy) = (x - sx, y - sy);
             if v.mode == DragMode::Undecided && (ddx.abs() > TAP_SLOP || ddy.abs() > TAP_SLOP) {
                 v.mode = if ddy > ddx.abs() { DragMode::Dismiss } else { DragMode::Page };
+                if v.mode == DragMode::Dismiss {
+                    // Render the page below again while the photo is still being dragged, so its first frame is
+                    // not drawn during the close animation.
+                    v.covering = false;
+                }
             }
             match v.mode {
                 DragMode::Page => {
