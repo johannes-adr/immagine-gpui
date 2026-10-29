@@ -55,7 +55,8 @@ impl Immagine {
                             .size(px(cell))
                             .flex_none()
                             .bg(placeholder)
-                            .children(picture.map(|image| img(image).size_full().object_fit(ObjectFit::Cover)))
+                            .overflow_hidden()
+                            .children(picture.map(|image| img(image).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Cover)))
                             .child(
                                 canvas(
                                     move |bounds, _, _| {

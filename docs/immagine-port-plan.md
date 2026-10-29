@@ -160,3 +160,12 @@ Phase 0 (1 Person)
 - **Bild-Pipeline neu** (`src/immagine/thumbs.rs`, `web_adapters/image_loader.rs`): `fetch` → `createImageBitmap` → `OffscreenCanvas.getImageData` → `RenderImage` (BGRA). Der Browser dekodiert nativ statt der `image`-Crate im WASM-Hauptthread. Dazu: max. 6 gleichzeitige Ladevorgänge, neueste Frames zuerst, veraltete Anfragen (aus dem Bild gescrollt) werden verworfen, LRU mit 160-MB-Budget für dekodierte Pixel, ausgeworfene Bilder werden per `Window::drop_image` aus dem Atlas entfernt. Thumbhash-Platzhalter (`logic::thumbhash`) füllen Kacheln bis zum Bild.
 - **Messung** (gleicher Browser-Pane, Foto-Raster scrollen): vorher 37–47 FPS, Worst-Frame 56–90 ms; nachher 55–61 FPS, Worst-Frame 19–33 ms, auch nach 300 schnellen Wheel-Events (~7 000 Zeilen weit). JS-Heap 11 MB. WASM-Speicher und iPhone-Verhalten nicht gemessen.
 - Viewer-Seiten (Raster-Thumbnail + `preview`) laufen durch dieselbe Pipeline.
+
+## 17. Stand Welle C, Teil 3: Alben und Personen (Haiku-Agenten, im Browser-Pane geprüft)
+
+- **Alben** (`src/immagine/albums.rs`): Kacheln für Ordner (2×2-Collage) und Alben, Ordner-Navigation mit Zurück-Chip/Breadcrumb, Albumseite mit `photo_grid`. Geprüft: 12 Alben, „Favoriten“ geöffnet, Foto im Viewer („2 von 3“).
+- **Personen** (`src/immagine/people.rs`): lädt Personen per `ImmichClient::people`, runde Porträts über die Thumb-Pipeline, Personenseite mit `person_assets`. Geprüft: 514 Personen, Person „Johannes“ mit 5 707 Fotos.
+- **Fehler gefunden und behoben:** Gitterkacheln clippten nicht; Bilder mit `ObjectFit::Cover` ragten über die Kachel hinaus und wurden nur von der nächsten Zeile überdeckt (bei einer einzigen Zeile sichtbar). Fix: `overflow_hidden` an der Kachel, Bild `absolute().size_full()`.
+- `log_out` setzt jetzt Alben, Personen, Viewer und Tab zurück.
+- **Offen:** Alben: Favoriten-Kachel, Anlegen/Umbenennen/Löschen, Wisch-zurück, Virtualisierung der Kacheln, Cover-Berechnung bei jedem Sync. Personen: Namen/Geburtstag ändern, Zusammenführen, Ausblenden; Wisch-zurück. Beide: kein Viewer-Pinch, keine Info.
+- **Prozess:** neue Worktrees brauchen `assets/*.sub.ttf` (git-ignoriert) zum Bauen.

@@ -228,6 +228,10 @@ impl Immagine {
         self.token.clear();
         self.engine = None;
         self.items = Rc::new(Vec::new());
+        self.albums = Default::default();
+        self.people = Default::default();
+        self.viewer = None;
+        self.tab = 0;
         self.screen = Screen::Login;
         cx.spawn(async move |_, _| {
             let _ = idb::put(DB, SNAPSHOT_KEY, b"").await;
