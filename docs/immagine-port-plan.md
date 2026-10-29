@@ -127,3 +127,10 @@ Phase 0 (1 Person)
 - **Authentifizierung per Cookie:** `POST /api/auth/login` über den Proxy setzt `immich_access_token` (HttpOnly, Path=/). Danach hängt der Browser das Cookie an alle gleich-originalen `/api/...`-Requests an, auch an die von `img()`. Header (Bearer) kann `img()` nicht setzen, Cookies brauchen es nicht. Der Login läuft daher über `fetch` (oder `FetchTransport`), nicht über `ImmichClient` mit Token-Parameter allein.
 - **Absolute URL nötig/getestet:** im Spike wurde `http://localhost:8080/...` verwendet; relative URLs sind nicht geprüft. Für die App `location.origin` aus JS durchreichen.
 - **Offen:** Dekodierung von großen Originalen/Vorschauen blockiert evtl. den Hauptthread (die `image`-Crate dekodiert in WASM langsam). Für das Raster reichen `thumbnail`-Größen; für den Viewer ggf. `createImageBitmap` nachziehen. Kein eigener Prioritäts-/Abbruch-Mechanismus: `img()` lädt, was gerendert wird, die Prio-Queue (`rendition_cache`) muss davor entscheiden, welche Zellen überhaupt ein `img` bekommen.
+
+## 13. Stand Welle B (erledigt)
+
+- **B1 Sync** (`src/logic/sync/`): gemergt, 23 Tests. `SyncEngine<S, T, C>`: Outbox → Full Sync → Stream. Offen: `repairAlbumLinks`, Callbacks/Coalescing, parallele Detailabrufe.
+- **B2 Adapter** (`src/web_adapters/`, nur wasm): `FetchTransport` (fetch, Cookies same-origin), IndexedDB-Key-Value (`idb::put/get`), `WebClock`, `selftest`/`sync_selftest` (aus der Konsole aufrufbar).
+- **Gegen den echten Server geprüft** (Browser-Pane, Login per Cookie über den Proxy): Full Sync 26 377 Assets + 12 Alben in ~4,8 s, danach inkrementeller Lauf in ~50 ms; Snapshot-Roundtrip über IndexedDB (100 Assets: 74 KB) stimmt. Snapshot für alle 26k Assets noch nicht gemessen (grob ~20 MB JSON, Schreiben/Laden prüfen).
+- Offen für Welle C: Thumbnail-Queue (Prio, Abbruch), Snapshot-Persistenz im App-Ablauf (Start: restore, Ende: put), Login-Screen, Raster/Viewer.
