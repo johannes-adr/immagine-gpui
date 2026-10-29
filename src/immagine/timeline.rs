@@ -25,6 +25,7 @@ impl Immagine {
         let rows = items.len().div_ceil(columns);
         let footer = self.bottom.max(10.) + 84.;
 
+        let handle = self.grid_scroll.borrow_mut().entry(id).or_default().clone();
         let origin = self.origin.clone();
         let placeholder = p.chip;
         let view = cx.weak_entity();
@@ -85,6 +86,7 @@ impl Immagine {
                 })
                 .collect()
         })
+        .track_scroll(&handle)
         .flex_1()
     }
 

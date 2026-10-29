@@ -71,6 +71,8 @@ pub(crate) struct Immagine {
     tile_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     viewer: Option<viewer::Viewer>,
     viewer_serial: u32,
+    /// Scroll position of each photo grid, kept here so a grid can stop rendering while the viewer covers it.
+    grid_scroll: std::cell::RefCell<std::collections::HashMap<&'static str, UniformListScrollHandle>>,
     thumbs: thumbs::SharedThumbs,
     pinch: Option<crate::web_adapters::pinch::PinchHandle>,
     albums: albums::AlbumsState,
@@ -131,6 +133,7 @@ impl Immagine {
             tile_bounds: Rc::new(RefCell::new(HashMap::new())),
             viewer: None,
             viewer_serial: 0,
+            grid_scroll: Default::default(),
             thumbs: thumbs::new(cx.weak_entity()),
             pinch: None,
             albums: Default::default(),
@@ -302,7 +305,10 @@ impl Render for Immagine {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::new(self.dark);
         let background = if self.dark { rgb(0x000000) } else { rgb(0xffffff) };
+        // Under a fully open viewer nothing of the page shows; not rendering it keeps swipes smooth.
+        let covered = self.viewer.as_ref().is_some_and(|v| v.covering && !v.closing);
         let content = match self.screen {
+            _ if covered => div().into_any_element(),
             Screen::Loading => div().into_any_element(),
             Screen::Login => self.login_view(&p, cx).into_any_element(),
             Screen::Timeline if self.tab == 0 => self.timeline_view(&p, window, cx).into_any_element(),

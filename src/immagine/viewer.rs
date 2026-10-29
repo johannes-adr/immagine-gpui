@@ -29,6 +29,8 @@ const PAGE_FRACTION: f32 = 0.2;
 const CLOSE_SCALE: f32 = 0.82;
 /// ... or a quick downward flick (px per move event) after at least this much travel.
 const FLICK_SPEED: f32 = 14.;
+/// Black strip between neighbouring photos while swiping, so their edges stay apart.
+const PAGE_GAP: f32 = 20.;
 const MAX_ZOOM: f32 = 6.;
 const DOUBLE_TAP_ZOOM: f32 = 2.5;
 /// Above this zoom the full-size rendition is loaded on top of the preview.
@@ -59,6 +61,8 @@ pub(super) struct Viewer {
     index: usize,
     from: Option<Bounds<Pixels>>,
     pub(super) closing: bool,
+    /// The open animation is over and the viewer hides the page below; the root skips rendering it.
+    pub(super) covering: bool,
     serial: u32,
     /// Pointer position where the current drag started, the last one seen, and the distance moved.
     start: Option<(f32, f32)>,
@@ -142,6 +146,7 @@ impl Immagine {
             index,
             from,
             closing: false,
+            covering: false,
             serial: self.viewer_serial,
             start: None,
             last: (0., 0.),
@@ -162,6 +167,18 @@ impl Immagine {
             details: None,
             video: None,
         });
+        let serial = self.viewer_serial;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(500)).await;
+            this.update(cx, |t, cx| {
+                if let Some(v) = t.viewer.as_mut().filter(|v| v.serial == serial && !v.closing) {
+                    v.covering = true;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
         if self.pinch.is_none() {
             let weak = cx.weak_entity();
             let async_cx = cx.to_async();
@@ -179,6 +196,7 @@ impl Immagine {
             return;
         }
         v.closing = true;
+        v.covering = false;
         v.start = None;
         v.video = None;
         v.zoom = 1.;
@@ -281,11 +299,11 @@ impl Immagine {
                     if dx < 0. && v.index + 1 < count {
                         v.index += 1;
                         v.reset_view();
-                        start_dx = dx + width;
+                        start_dx = dx + width + PAGE_GAP;
                     } else if dx > 0. && v.index > 0 {
                         v.index -= 1;
                         v.reset_view();
-                        start_dx = dx - width;
+                        start_dx = dx - width - PAGE_GAP;
                     }
                 }
                 self.snap_back(start_dx, 0., 1., cx);
@@ -648,10 +666,10 @@ impl Immagine {
                             if settled && zoom == 1. && ds >= 0.999 && dy.abs() < 0.5 {
                                 // Neighbours slide in beside the current page.
                                 if index > 0 {
-                                    el = el.child(div().absolute().left(px(dx - vw)).top_0().w(px(vw)).h(px(vh)).children(page(index - 1, false)));
+                                    el = el.child(div().absolute().left(px(dx - vw - PAGE_GAP)).top_0().w(px(vw)).h(px(vh)).children(page(index - 1, false)));
                                 }
                                 if index + 1 < count {
-                                    el = el.child(div().absolute().left(px(dx + vw)).top_0().w(px(vw)).h(px(vh)).children(page(index + 1, false)));
+                                    el = el.child(div().absolute().left(px(dx + vw + PAGE_GAP)).top_0().w(px(vw)).h(px(vh)).children(page(index + 1, false)));
                                 }
                             }
                             el.child(
