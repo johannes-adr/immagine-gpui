@@ -11,31 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Immich's `exifInfo` of one asset (`Asset.swift`).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExifInfo {
-    pub make: Option<String>,
-    pub model: Option<String>,
-    pub exif_image_width: Option<i64>,
-    pub exif_image_height: Option<i64>,
-    pub file_size_in_byte: Option<i64>,
-    pub orientation: Option<String>,
-    pub date_time_original: Option<String>,
-    pub lens_model: Option<String>,
-    pub f_number: Option<f64>,
-    pub focal_length: Option<f64>,
-    pub iso: Option<f64>,
-    pub exposure_time: Option<String>,
-    pub latitude: Option<f64>,
-    pub longitude: Option<f64>,
-    pub city: Option<String>,
-    pub state: Option<String>,
-    pub country: Option<String>,
-    pub description: Option<String>,
-    pub projection_type: Option<String>,
-    pub rating: Option<i64>,
-}
+pub use super::asset::ExifInfo;
 
 impl ExifInfo {
     /// Nothing known yet (a place set before the details arrived).

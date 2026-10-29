@@ -4,3 +4,4 @@ certs/
 *.log
 # Proprietary system fonts: supply your own (see README)
 assets/*.ttf
+.claude/worktrees/

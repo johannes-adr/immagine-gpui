@@ -147,7 +147,7 @@ pub(crate) fn date_bucket_of(iso: &str) -> Option<String> {
     is_date.then(|| iso[..10].to_string())
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExifInfo {
     #[serde(default)]
