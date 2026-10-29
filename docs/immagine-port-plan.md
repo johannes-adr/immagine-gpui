@@ -120,3 +120,10 @@ Phase 0 (1 Person)
 ## 11. Auftragsvorlage für Haiku-Agenten
 
 > Du portierst ein Modul der iOS-App Immagine nach Rust. Datei: `src/logic/<modul>.rs` (nur diese Dateien ändern, außer anderes steht im Kopfkommentar). Lies im Kopfkommentar die Swift-Quelle und die Test-Spezifikation in `../immagine`. 1) Portiere die zugehörigen XCTest-Tests als `#[cfg(test)] mod tests` (gleiche Eingaben und Erwartungen, Namen in snake_case). 2) Implementiere, bis `cargo test --lib logic::<modul>` grün ist. 3) Keine Imports von `gpui`, `web-sys`, `wasm-bindgen`. 4) Keine neuen Abhängigkeiten ohne Rückfrage. 5) Arbeite im eigenen Worktree-Branch, committe dort und berichte: was portiert, welche Tests, was bewusst weggelassen (und warum).
+
+## 12. Ergebnis B2-Spike: Bild-Pipeline (geprüft im Browser-Pane)
+
+- **Funktioniert ohne eigenen Dekoder:** `gpui::img(SharedUri::from("<url>"))` lädt über GPUIs `FetchHttpClient`, dekodiert mit der `image`-Crate (JPEG ist aktiviert) und zeichnet. Getestet mit `/api/assets/<id>/thumbnail?size=preview` (Preview ~400 KB JPEG), das Foto erschien im Fenster.
+- **Authentifizierung per Cookie:** `POST /api/auth/login` über den Proxy setzt `immich_access_token` (HttpOnly, Path=/). Danach hängt der Browser das Cookie an alle gleich-originalen `/api/...`-Requests an, auch an die von `img()`. Header (Bearer) kann `img()` nicht setzen, Cookies brauchen es nicht. Der Login läuft daher über `fetch` (oder `FetchTransport`), nicht über `ImmichClient` mit Token-Parameter allein.
+- **Absolute URL nötig/getestet:** im Spike wurde `http://localhost:8080/...` verwendet; relative URLs sind nicht geprüft. Für die App `location.origin` aus JS durchreichen.
+- **Offen:** Dekodierung von großen Originalen/Vorschauen blockiert evtl. den Hauptthread (die `image`-Crate dekodiert in WASM langsam). Für das Raster reichen `thumbnail`-Größen; für den Viewer ggf. `createImageBitmap` nachziehen. Kein eigener Prioritäts-/Abbruch-Mechanismus: `img()` lädt, was gerendert wird, die Prio-Queue (`rendition_cache`) muss davor entscheiden, welche Zellen überhaupt ein `img` bekommen.
