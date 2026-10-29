@@ -6,7 +6,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#cfe3ff">
+  <meta name="theme-color" content="#ffffff">
   <meta name="apple-mobile-web-app-title" content="Immagine">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
@@ -17,7 +17,7 @@
     /* Pin the page to the visible area so iOS Safari cannot scroll the document or leave a gap
        when its toolbar collapses; the canvas fills this box. */
     html, body { margin: 0; position: fixed; inset: 0; width: 100%; height: 100%; overflow: hidden; overscroll-behavior: none;
-      background: #cfe3ff; -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }
+      background: #fff; -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }
     @supports (height: 100dvh) { html, body { height: 100dvh; } }
     /* Installed iOS PWA (WebKit 301108): the viewport comes up one status-bar height short and nothing
        position:fixed paints below it, so drop the fixed pinning and size body to the large viewport. */
@@ -25,14 +25,14 @@
       html { position: static; inset: auto; height: auto; min-height: 100lvh; }
       body { position: relative; inset: auto; width: 100%; height: 100lvh; min-height: 100lvh; }
     }
-    @media (prefers-color-scheme: dark) { html, body { background: #0b1026; } }
+    @media (prefers-color-scheme: dark) { html, body { background: #000; } }
     /* Launch screen: shown instantly, removed once GPUI has painted its first frame. */
     #splash { position: fixed; inset: 0; box-sizing: border-box; padding: calc(env(safe-area-inset-top) + 64px) 20px 0;
-      font: 700 34px/1.2 -apple-system, system-ui, sans-serif; color: #1c2a44;
-      background: linear-gradient(160deg, #cfe3ff, #e9dcff); transition: opacity .2s; }
-    #splash i { display: block; height: 52px; margin-top: 12px; border-radius: 14px; background: rgba(255,255,255,.55); }
+      font: 700 34px/1.2 -apple-system, system-ui, sans-serif; color: #000;
+      background: #fff; transition: opacity .2s; }
+    #splash i { display: block; height: 52px; margin-top: 12px; border-radius: 14px; background: rgba(0,0,0,.06); }
     #splash i:first-of-type { margin-top: 24px; }
-    @media (prefers-color-scheme: dark) { #splash { color: #fff; background: linear-gradient(160deg, #0b1026, #1d1740); }
+    @media (prefers-color-scheme: dark) { #splash { color: #fff; background: #000; }
       #splash i { background: rgba(255,255,255,.08); } }
     #probe { position: fixed; visibility: hidden; pointer-events: none;
       padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }

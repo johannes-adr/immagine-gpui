@@ -273,7 +273,10 @@ impl Immagine {
                                             .text_color(label)
                                             .child(name),
                                     )
-                                    .on_click(move |_, _, cx| {
+                                    .on_click(move |_, window, cx| {
+                                        if window.tap_caught_fling() {
+                                            return;
+                                        }
                                         view.update(cx, |this, cx| this.open_person(target.clone(), cx)).ok();
                                     })
                             })

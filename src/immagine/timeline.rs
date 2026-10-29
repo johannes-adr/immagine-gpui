@@ -71,7 +71,10 @@ impl Immagine {
                                 .absolute()
                                 .size_full(),
                             )
-                            .on_click(move |_, _, cx| {
+                            .on_click(move |_, window, cx| {
+                                if window.tap_caught_fling() {
+                                    return;
+                                }
                                 view.update(cx, |this, cx| this.open_viewer(all.clone(), idx, cx)).ok();
                             })
                     });

@@ -293,7 +293,7 @@ impl Immagine {
 impl Render for Immagine {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::new(self.dark);
-        let (bg_from, bg_to) = if self.dark { (rgb(0x0b1026), rgb(0x2a1450)) } else { (rgb(0xcfe3ff), rgb(0xf6dcff)) };
+        let background = if self.dark { rgb(0x000000) } else { rgb(0xffffff) };
         let content = match self.screen {
             Screen::Loading => div().into_any_element(),
             Screen::Login => self.login_view(&p, cx).into_any_element(),
@@ -309,7 +309,7 @@ impl Render for Immagine {
             .size_full()
             .relative()
             .overflow_hidden()
-            .bg(linear_gradient(160., linear_color_stop(bg_from, 0.), linear_color_stop(bg_to, 1.)))
+            .bg(background)
             .text_color(p.label)
             .child(content)
             .children(chrome)

@@ -1288,6 +1288,7 @@ pub struct Window {
     pub(crate) window_profiler: profiler::WindowProfiler,
     last_input_modality: InputModality,
     touch_gestures: TouchGestureRecognizer,
+    tap_caught_fling: bool,
     touch_prediction_enabled: bool,
     long_press_timer: Option<Task<()>>,
     long_press_capture: Option<EntityId>,
@@ -2188,6 +2189,7 @@ impl Window {
             #[cfg(feature = "profiler")]
             window_profiler: profiler::WindowProfiler::new(handle.window_id())?,
             last_input_modality: InputModality::Mouse,
+            tap_caught_fling: false,
             touch_gestures: TouchGestureRecognizer::new(
                 cx.platform
                     .gestures()
@@ -5877,6 +5879,12 @@ impl Window {
     /// Sets whether recognized touch pans may use the platform's predicted
     /// touch positions. Disabling drops [`TouchEvent::predicted_position`]
     /// before gesture recognition, so pans track only raw touch positions.
+    /// True while a tap that only stopped a scrolling fling is being dispatched. Scrolled content should not
+    /// treat it as a selection; controls outside the content should.
+    pub fn tap_caught_fling(&self) -> bool {
+        self.tap_caught_fling
+    }
+
     pub fn set_touch_prediction_enabled(&mut self, enabled: bool) {
         self.touch_prediction_enabled = enabled;
     }
@@ -5936,6 +5944,15 @@ impl Window {
                 self.dispatch_mouse_event(&down, cx);
                 cx.propagate_event = true;
                 self.dispatch_mouse_event(&up, cx);
+            }
+            RecognizedTouchGesture::CaughtTap { down, up } => {
+                self.mouse_position = up.position;
+                self.tap_caught_fling = true;
+                cx.propagate_event = true;
+                self.dispatch_mouse_event(&down, cx);
+                cx.propagate_event = true;
+                self.dispatch_mouse_event(&up, cx);
+                self.tap_caught_fling = false;
             }
             RecognizedTouchGesture::TouchDrag(touch_drag) => {
                 self.mouse_position = touch_drag.start_position;

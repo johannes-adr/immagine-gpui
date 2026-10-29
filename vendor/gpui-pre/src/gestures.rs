@@ -545,6 +545,13 @@ pub(crate) enum RecognizedTouchGesture {
         down: MouseDownEvent,
         up: MouseUpEvent,
     },
+    /// A release without movement by a touch that caught a fling. The content stays stopped; the press is
+    /// still delivered so controls outside the scrolled content (a tab bar) stay tappable. Content that
+    /// scrolled should ignore it (`Window::tap_caught_fling`).
+    CaughtTap {
+        down: MouseDownEvent,
+        up: MouseUpEvent,
+    },
     TouchDrag(TouchDragEvent),
     LongPress(LongPressEvent),
 }
@@ -827,6 +834,21 @@ impl TouchGestureRecognizer {
                         Point::default(),
                         TouchPhase::Ended,
                     )));
+                    recognized.push(RecognizedTouchGesture::CaughtTap {
+                        down: MouseDownEvent {
+                            button: MouseButton::Left,
+                            position: event.position,
+                            modifiers: Modifiers::default(),
+                            click_count: 1,
+                            first_mouse: false,
+                        },
+                        up: MouseUpEvent {
+                            button: MouseButton::Left,
+                            position: event.position,
+                            modifiers: Modifiers::default(),
+                            click_count: 1,
+                        },
+                    });
                 }
                 TouchGestureState::Panning { touch, axis } if touch.id == event.id => {
                     // The release deliberately contributes no velocity

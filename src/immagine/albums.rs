@@ -252,7 +252,11 @@ impl Immagine {
                     .active(|s| s.opacity(0.6))
                     .child(cell)
                     .child(caption(p, &AlbumPath::leaf_of_album_name(&album.album_name), count_label(count, "Foto", "Fotos")))
-                    .on_click(cx.listener(move |this, _, _, cx| this.open_album(&id, cx)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if !window.tap_caught_fling() {
+                            this.open_album(&id, cx)
+                        }
+                    }))
                     .into_any_element(),
             );
         }
