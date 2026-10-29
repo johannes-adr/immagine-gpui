@@ -19,9 +19,12 @@
     html, body { margin: 0; position: fixed; inset: 0; width: 100%; height: 100%; overflow: hidden; overscroll-behavior: none;
       background: #cfe3ff; -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }
     @supports (height: 100dvh) { html, body { height: 100dvh; } }
-    /* Installed PWA: there is no browser chrome, and dvh/% can stop short of the home-indicator area
-       on iOS. 100vh is the full screen there, so use it and let the canvas run edge to edge. */
-    @media (display-mode: standalone) { html, body { height: 100vh; min-height: 100vh; } }
+    /* Installed iOS PWA (WebKit 301108): the viewport comes up one status-bar height short and nothing
+       position:fixed paints below it, so drop the fixed pinning and size body to the large viewport. */
+    @media (display-mode: standalone) {
+      html { position: static; inset: auto; height: auto; min-height: 100lvh; }
+      body { position: relative; inset: auto; width: 100%; height: 100lvh; min-height: 100lvh; }
+    }
     @media (prefers-color-scheme: dark) { html, body { background: #0b1026; } }
     /* Launch screen: shown instantly, removed once GPUI has painted its first frame. */
     #splash { position: fixed; inset: 0; box-sizing: border-box; padding: calc(env(safe-area-inset-top) + 64px) 20px 0;
@@ -41,19 +44,6 @@
   <script type="module">
     // Start the wasm download right away, in parallel with the JS glue module.
     const t0 = performance.now();
-    // Installed iOS PWA: dvh/vh/% can stop short of the home-indicator area (WebKit bugs 237961,
-    // 254868, 292603), so size the page from the physical screen instead.
-    if (navigator.standalone || matchMedia("(display-mode: standalone)").matches) {
-      const fit = () => {
-        const portrait = innerHeight >= innerWidth;
-        const long = Math.max(screen.width, screen.height), short = Math.min(screen.width, screen.height);
-        const h = portrait ? long : short;
-        for (const el of [document.documentElement, document.body]) el.style.height = Math.max(h, innerHeight) + "px";
-      };
-      fit();
-      addEventListener("resize", fit);
-      addEventListener("orientationchange", () => setTimeout(fit, 100));
-    }
     const wasm = fetch(new URL("./pkg/gpui_web_demo_bg.wasm", import.meta.url));
     const log = (m) => console.log(`[boot] ${m} +${Math.round(performance.now() - t0)}ms (since nav ${Math.round(performance.now())}ms)`);
     try {
