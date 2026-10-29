@@ -314,6 +314,7 @@ impl Render for Immagine {
             .child(content)
             .children(chrome)
             .children(viewer)
-            .child(fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, self.webgpu))
+            // FPS debug badge, re-enable when profiling:
+            // .child(fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, self.webgpu))
     }
 }
