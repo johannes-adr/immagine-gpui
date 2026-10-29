@@ -176,6 +176,17 @@ impl<T: HttpTransport> ImmichClient<T> {
         self.fetch_json(request(Method::Post, "/api/albums", Some(token), Some(body))).await
     }
 
+    pub async fn rename_album(&self, id: &str, name: &str, token: &str) -> Result<(), ClientError> {
+        let body = json_body(&serde_json::json!({ "albumName": name }))?;
+        self.fetch(request(Method::Patch, format!("/api/albums/{}", encode(id)), Some(token), Some(body))).await.map(|_| ())
+    }
+
+    /// The photo on the album's tile.
+    pub async fn set_album_thumbnail(&self, id: &str, asset_id: &str, token: &str) -> Result<(), ClientError> {
+        let body = json_body(&serde_json::json!({ "albumThumbnailAssetId": asset_id }))?;
+        self.fetch(request(Method::Patch, format!("/api/albums/{}", encode(id)), Some(token), Some(body))).await.map(|_| ())
+    }
+
     pub async fn delete_album(&self, id: &str, token: &str) -> Result<(), ClientError> {
         self.fetch(request(Method::Delete, format!("/api/albums/{}", encode(id)), Some(token), None)).await.map(|_| ())
     }
@@ -1172,5 +1183,17 @@ mod tests {
         assert_eq!(req.method, Method::Delete);
         assert_eq!(req.path, "/api/faces/f1");
         assert_eq!(body_json(&req), json!({"force": false}));
+    }
+
+    #[test]
+    fn rename_album_sends_patch() {
+        let t = MockTransport::new();
+        t.push(HttpResponse::json(200, "{}"));
+        let c = ImmichClient::new("http://h", t).unwrap();
+        block_on(c.rename_album("a1", "Neu", "tok")).unwrap();
+        let r = &c.transport.requests.borrow()[0];
+        assert_eq!(r.method, Method::Patch);
+        assert_eq!(r.path, "/api/albums/a1");
+        assert_eq!(String::from_utf8_lossy(r.body.as_ref().unwrap()), "{\"albumName\":\"Neu\"}");
     }
 }
