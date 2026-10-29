@@ -84,3 +84,11 @@ Glass semantics to remember: later glass elements do not see content painted bet
 - Simulators: iOS 18.4 (iPhone 16 Pro, WebGL2) and iOS 27 (iPhone 18 Pro, WebGPU) are both installed; pass `device` to the simulator tool. On iOS 26+ Safari the share sheet is behind the page-menu button (left of the URL) > Teilen > Mehr anzeigen > Zum Home-Bildschirm. The screenshot tool can lag one step behind a tap, so take a second screenshot before concluding.
 - A screenshot that looks frozen (same FPS badge numbers after relaunch) means the app was resumed, not restarted.
 - Debugging layout inside the PWA has no console: add a temporary fixed `<div>` that prints `innerHeight`, `screen.height` and the canvas rect, and remove it afterwards.
+
+## Immagine port
+
+Porting Robin's Immagine (`../immagine`, Swift/iOS, clone of github.com/RobinCoding/immagine) to this app; plan and agent split in `docs/immagine-port-plan.md`.
+
+- Platform-independent logic lives in `src/logic/` and must not import `gpui`, `web-sys` or `wasm-bindgen`. Test it natively with `cargo test --lib` (the crate is `rlib` + `cdylib`).
+- The module is called `logic`, not `core`, to avoid clashing with the `core` crate.
+- `serve.py` proxies `/api/*` to `IMMICH_URL` (default `http://immich.server.local`), so the page is same-origin. Credentials for E2E come from the environment (`E2E_SERVER_URL`, `E2E_EMAIL`, `E2E_PASSWORD`), never from files in the repo.

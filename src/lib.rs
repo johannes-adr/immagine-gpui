@@ -6,6 +6,7 @@
 
 mod app;
 mod components;
+pub mod logic;
 mod theme;
 mod util;
 #[cfg(target_family = "wasm")]

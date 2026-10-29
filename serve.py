@@ -1,4 +1,4 @@
-import http.server, os, socket, socketserver, ssl, subprocess, threading
+import http.client, http.server, os, socket, socketserver, ssl, subprocess, threading, urllib.parse
 
 HTTP_PORT, HTTPS_PORT = 8080, 8443
 CERT_DIR = "certs"
@@ -14,8 +14,54 @@ self.addEventListener("activate", (e) => e.waitUntil((async () => {
 })()));
 """
 
+# Same-origin proxy for the Immich API: /api/* is forwarded to IMMICH_URL, so the page needs no CORS
+# and the https page can reach an http server (no mixed content).
+IMMICH = urllib.parse.urlsplit(os.environ.get("IMMICH_URL", "http://immich.server.local"))
+HOP = {"connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "proxy-authorization", "proxy-authenticate", "host"}
+
 class H(http.server.SimpleHTTPRequestHandler):
     extensions_map = {**http.server.SimpleHTTPRequestHandler.extensions_map, ".wasm": "application/wasm"}
+
+    def proxy(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0)) or None
+        headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP | {"content-length", "accept-encoding"}}
+        conn_cls = http.client.HTTPSConnection if IMMICH.scheme == "https" else http.client.HTTPConnection
+        conn = conn_cls(IMMICH.netloc, timeout=60)
+        try:
+            conn.request(self.command, self.path, body, headers)
+            r = conn.getresponse()
+            self.send_response(r.status)
+            for k, v in r.getheaders():
+                if k.lower() not in HOP | {"content-length"}:
+                    self.send_header(k, v)
+            # Close-delimited body: lets large originals/videos stream without buffering.
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            while chunk := r.read(65536):
+                self.wfile.write(chunk)
+        except (OSError, http.client.HTTPException) as e:
+            if not self.wfile.closed:
+                try:
+                    self.send_error(502, f"Immich proxy: {e}")
+                except OSError:
+                    pass
+        finally:
+            conn.close()
+
+    def do_POST(self): self.proxy() if self.path.startswith("/api/") else self.send_error(405)
+    do_PUT = do_PATCH = do_DELETE = do_POST
+
+    def do_GET(self):
+        if self.path.startswith("/api/"):
+            return self.proxy()
+        super().do_GET()
+
+    def do_HEAD(self):
+        if self.path.startswith("/api/"):
+            return self.proxy()
+        super().do_HEAD()
+
     def send_head(self):
         if not PWA and self.path.split("?")[0] == "/sw.js":
             self.send_response(200)
@@ -89,7 +135,8 @@ https_server.socket = ctx.wrap_socket(https_server.socket, server_side=True)
 
 serve(http_server)
 print("Service worker: " + ("real (PWA=1)" if PWA else "disabled (set PWA=1 to enable)"))
-print(f"Desktop: http://localhost:{HTTP_PORT}")
+print(f"Immich proxy: /api -> {IMMICH.geturl()}")
+print(f"Desktop:http://localhost:{HTTP_PORT}")
 print(f"iPhone:  https://{ip}:{HTTPS_PORT}   (same Wi-Fi; accept the certificate warning)", flush=True)
 try:
     https_server.serve_forever()

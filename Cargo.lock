@@ -2541,7 +2541,10 @@ checksum = "e0f9dae92b9bc15baa6e530c90bdd4c689d3710bd4d18c3566deb1d6ae182daf"
 name = "gpui-web-demo"
 version = "0.1.0"
 dependencies = [
+ "futures-lite",
  "gpui-kit",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
 ]
 
