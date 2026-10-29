@@ -72,8 +72,6 @@ pub(super) struct Viewer {
     index: usize,
     from: Option<Bounds<Pixels>>,
     pub(super) closing: bool,
-    /// The open animation is over and the viewer hides the page below; the root skips rendering it.
-    pub(super) covering: bool,
     serial: u32,
     /// Pointer position where the current drag started, the last one seen, and the distance moved.
     start: Option<(f32, f32)>,
@@ -158,7 +156,6 @@ impl Immagine {
             index,
             from,
             closing: false,
-            covering: false,
             serial: self.viewer_serial,
             start: None,
             last: (0., 0.),
@@ -180,18 +177,6 @@ impl Immagine {
             details: None,
             video: None,
         });
-        let serial = self.viewer_serial;
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(500)).await;
-            this.update(cx, |t, cx| {
-                if let Some(v) = t.viewer.as_mut().filter(|v| v.serial == serial && !v.closing) {
-                    v.covering = true;
-                    cx.notify();
-                }
-            })
-            .ok();
-        })
-        .detach();
         if self.pinch.is_none() {
             let weak = cx.weak_entity();
             let async_cx = cx.to_async();
@@ -206,17 +191,6 @@ impl Immagine {
     pub(super) fn close_viewer(&mut self, cx: &mut Context<Self>) {
         let Some(v) = self.viewer.as_mut() else { return };
         if v.closing {
-            return;
-        }
-        if v.covering {
-            // The page below is not rendered yet: bring it back first and start closing a few frames later.
-            v.covering = false;
-            cx.notify();
-            cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(Duration::from_millis(80)).await;
-                this.update(cx, |t, cx| t.close_viewer(cx)).ok();
-            })
-            .detach();
             return;
         }
         v.closing = true;
@@ -270,11 +244,6 @@ impl Immagine {
             let (ddx, ddy) = (x - sx, y - sy);
             if v.mode == DragMode::Undecided && (ddx.abs() > TAP_SLOP || ddy.abs() > TAP_SLOP) {
                 v.mode = if ddy > ddx.abs() { DragMode::Dismiss } else { DragMode::Page };
-                if v.mode == DragMode::Dismiss {
-                    // Render the page below again while the photo is still being dragged, so its first frame is
-                    // not drawn during the close animation.
-                    v.covering = false;
-                }
             }
             match v.mode {
                 DragMode::Page => {
