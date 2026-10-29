@@ -38,7 +38,7 @@ pub(super) struct Viewer {
     items: Rc<Vec<TimelineItem>>,
     index: usize,
     from: Option<Bounds<Pixels>>,
-    closing: bool,
+    pub(super) closing: bool,
     serial: u32,
     /// Pointer position where the current drag started, the last one seen, and the distance moved.
     start: Option<(f32, f32)>,
