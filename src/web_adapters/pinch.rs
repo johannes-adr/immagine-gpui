@@ -16,6 +16,10 @@ pub enum Pinch {
     Move { ratio: f32, x: f32, y: f32 },
     /// One of the two fingers lifted.
     End,
+    /// A single finger touched down, moved (raw position, no gesture slop or axis lock) or lifted.
+    Down { x: f32, y: f32 },
+    Drag { x: f32, y: f32 },
+    Up { x: f32, y: f32 },
 }
 
 pub struct PinchHandle {
@@ -75,6 +79,9 @@ pub fn install(on_pinch: impl Fn(Pinch) + 'static) -> Option<PinchHandle> {
                 t.distance = Some(dist(a, b).max(1.));
                 drop(t);
                 cb(Pinch::Begin);
+            } else if t.points.len() == 1 {
+                drop(t);
+                cb(Pinch::Down { x: e.client_x() as f32, y: e.client_y() as f32 });
             }
         }));
     }
@@ -92,6 +99,9 @@ pub fn install(on_pinch: impl Fn(Pinch) + 'static) -> Option<PinchHandle> {
                 t.distance = Some(d);
                 drop(t);
                 cb(Pinch::Move { ratio: (d / last) as f32, x: ((a.0 + b.0) / 2.) as f32, y: ((a.1 + b.1) / 2.) as f32 });
+            } else if t.points.len() == 1 {
+                drop(t);
+                cb(Pinch::Drag { x: e.client_x() as f32, y: e.client_y() as f32 });
             }
         }));
     }
@@ -102,12 +112,15 @@ pub fn install(on_pinch: impl Fn(Pinch) + 'static) -> Option<PinchHandle> {
                 return;
             }
             let mut t = t.borrow_mut();
-            let was_pinching = t.points.len() == 2;
+            let count = t.points.len();
             t.points.remove(&e.pointer_id());
-            if was_pinching {
+            if count == 2 {
                 t.distance = None;
                 drop(t);
                 cb(Pinch::End);
+            } else if count == 1 {
+                drop(t);
+                cb(if e.type_() == "pointercancel" { Pinch::Up { x: -1., y: -1. } } else { Pinch::Up { x: e.client_x() as f32, y: e.client_y() as f32 } });
             }
         }));
     }

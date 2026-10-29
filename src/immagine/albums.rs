@@ -162,7 +162,7 @@ impl Immagine {
             return div().into_any_element();
         };
         let subtitle = count_label(open.items.len(), "Foto", "Fotos");
-        let back = div().flex().flex_row().child(chip(p, "album-back", "‹ Alben".into()).on_click(cx.listener(|this, _, _, cx| this.close_album(cx))));
+        let back = div().flex().flex_row().child(super::icons::back_chip(p.glass_tint, "album-back", rgb(BLUE).into()).on_click(cx.listener(|this, _, _, cx| this.close_album(cx))));
         let header = div()
             .px(px(PAD))
             .pt(px(20.))
@@ -267,10 +267,9 @@ impl Immagine {
             "Alben".to_string()
         } else {
             let parent = AlbumPath::parent_of(&st.path);
-            let up = if parent.is_empty() { "Alben".to_string() } else { AlbumPath::name_of(&parent) };
             header = header.child(
                 div().flex().flex_row().child(
-                    chip(p, "albums-up", format!("‹ {up}")).on_click(cx.listener(move |this, _, _, cx| this.go_to_folder(parent.clone(), cx))),
+                    super::icons::back_chip(p.glass_tint, "albums-up", rgb(BLUE).into()).on_click(cx.listener(move |this, _, _, cx| this.go_to_folder(parent.clone(), cx))),
                 ),
             );
             let mut crumbs = div().flex().flex_row().flex_wrap().gap_1().text_size(px(15.)).text_color(p.secondary);

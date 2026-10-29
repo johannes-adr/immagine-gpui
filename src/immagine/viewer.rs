@@ -25,14 +25,34 @@ use std::time::Duration;
 
 /// A swipe farther than this fraction of the screen width turns the page.
 const PAGE_FRACTION: f32 = 0.2;
-/// A downward swipe farther than this many px closes the viewer.
-const CLOSE_DISTANCE: f32 = 120.;
+/// Releasing a downward drag with the photo shrunk below this scale (1 = full size) closes the viewer.
+const CLOSE_SCALE: f32 = 0.82;
+/// ... or a quick downward flick (px per move event) after at least this much travel.
+const FLICK_SPEED: f32 = 14.;
 const MAX_ZOOM: f32 = 6.;
 const DOUBLE_TAP_ZOOM: f32 = 2.5;
 /// Above this zoom the full-size rendition is loaded on top of the preview.
 const FULLSIZE_ZOOM: f32 = 1.2;
 /// Movement (px) that turns a press into a drag, so a tap with a little jitter still counts as a tap.
 const TAP_SLOP: f32 = 8.;
+
+#[derive(Clone, Copy, PartialEq)]
+enum DragMode {
+    None,
+    /// Finger down, direction not decided yet.
+    Undecided,
+    /// Horizontal: turns the page.
+    Page,
+    /// Downward: the photo follows the finger and shrinks; released small enough it closes.
+    Dismiss,
+}
+
+/// Where the photo was (full-viewport box before aspect fitting) and how faded the backdrop when a drag closed it.
+#[derive(Clone, Copy)]
+struct Release {
+    rect: (f32, f32, f32, f32),
+    fade: f32,
+}
 
 pub(super) struct Viewer {
     items: Rc<Vec<TimelineItem>>,
@@ -46,6 +66,13 @@ pub(super) struct Viewer {
     moved: f32,
     dx: f32,
     dy: f32,
+    /// Scale of the photo while dismiss-dragging (1 = full size), scaled about `anchor`.
+    ds: f32,
+    anchor: (f32, f32),
+    mode: DragMode,
+    vel_y: f32,
+    release: Option<Release>,
+    snap_id: u32,
     zoom: f32,
     pan: (f32, f32),
     /// Two fingers are down: single-pointer drags are ignored.
@@ -55,6 +82,18 @@ pub(super) struct Viewer {
     info: bool,
     details: Option<Rc<Asset>>,
     video: Option<VideoHandle>,
+}
+
+/// Photo scale while dragging down by `dy`: 1 at rest, 0.5 at half a screen height.
+fn dismiss_scale(dy: f32, vh: f32) -> f32 {
+    1. - 0.5 * (dy.max(0.) / (vh * 0.5).max(1.)).clamp(0., 1.)
+}
+
+/// The largest box of aspect ratio `ar` (w/h) centered in `(x, y, w, h)`.
+fn fit(rect: (f32, f32, f32, f32), ar: f32) -> (f32, f32, f32, f32) {
+    let (x, y, w, h) = rect;
+    let (fw, fh) = if w / h > ar { (h * ar, h) } else { (w, w / ar) };
+    (x + (w - fw) / 2., y + (h - fh) / 2., fw, fh)
 }
 
 fn xy(p: Point<Pixels>) -> (f32, f32) {
@@ -67,6 +106,7 @@ impl Viewer {
         self.pan = (0., 0.);
         self.dx = 0.;
         self.dy = 0.;
+        self.ds = 1.;
         self.video = None;
         self.details = None;
     }
@@ -108,6 +148,12 @@ impl Immagine {
             moved: 0.,
             dx: 0.,
             dy: 0.,
+            ds: 1.,
+            anchor: (0., 0.),
+            mode: DragMode::None,
+            vel_y: 0.,
+            release: None,
+            snap_id: 0,
             zoom: 1.,
             pan: (0., 0.),
             pinching: false,
@@ -156,10 +202,15 @@ impl Immagine {
     fn drag_start(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
         if let Some(v) = self.viewer.as_mut().filter(|v| !v.closing && !v.pinching) {
             v.start = Some(xy(at));
+            v.anchor = xy(at);
             v.last = xy(at);
             v.moved = 0.;
             v.dx = 0.;
             v.dy = 0.;
+            v.ds = 1.;
+            v.vel_y = 0.;
+            v.mode = DragMode::Undecided;
+            v.snap_id += 1;
             cx.notify();
         }
     }
@@ -169,12 +220,27 @@ impl Immagine {
         let Some((sx, sy)) = v.start else { return };
         let (x, y) = xy(at);
         v.moved += (x - v.last.0).abs() + (y - v.last.1).abs();
+        v.vel_y = y - v.last.1;
         if v.zoom > 1. {
             v.pan = (v.pan.0 + x - v.last.0, v.pan.1 + y - v.last.1);
             v.clamp_pan();
         } else {
-            v.dx = x - sx;
-            v.dy = (y - sy).max(0.);
+            let (ddx, ddy) = (x - sx, y - sy);
+            if v.mode == DragMode::Undecided && (ddx.abs() > TAP_SLOP || ddy.abs() > TAP_SLOP) {
+                v.mode = if ddy > ddx.abs() { DragMode::Dismiss } else { DragMode::Page };
+            }
+            match v.mode {
+                DragMode::Page => {
+                    v.dx = ddx;
+                    v.dy = 0.;
+                }
+                DragMode::Dismiss => {
+                    v.dx = ddx;
+                    v.dy = ddy;
+                    v.ds = dismiss_scale(ddy, v.viewport.get().1);
+                }
+                _ => {}
+            }
         }
         v.last = (x, y);
         cx.notify();
@@ -185,29 +251,85 @@ impl Immagine {
         if v.start.take().is_none() {
             return;
         }
+        let mode = std::mem::replace(&mut v.mode, DragMode::None);
         if v.zoom > 1. {
             cx.notify();
             return;
         }
-        let (dx, dy) = (v.dx, v.dy);
-        v.dx = 0.;
-        v.dy = 0.;
-        if dy > CLOSE_DISTANCE && dy > dx.abs() {
-            self.close_viewer(cx);
-            return;
-        }
+        let (dx, dy, ds) = (v.dx, v.dy, v.ds);
         let count = v.items.len();
-        if dx.abs() > width * PAGE_FRACTION {
-            if dx < 0. && v.index + 1 < count {
-                v.index += 1;
-                v.reset_view();
-            } else if dx > 0. && v.index > 0 {
-                v.index -= 1;
-                v.reset_view();
+        match mode {
+            DragMode::Dismiss => {
+                if ds < CLOSE_SCALE || (dy > 40. && v.vel_y > FLICK_SPEED) {
+                    let (vw, vh) = v.viewport.get();
+                    let (ax, ay) = v.anchor;
+                    v.release = Some(Release {
+                        rect: (ax - ax * ds + dx, ay - ay * ds + dy, vw * ds, vh * ds),
+                        fade: (1. - dy / (vh * 0.5)).clamp(0.3, 1.),
+                    });
+                    v.dx = 0.;
+                    v.dy = 0.;
+                    v.ds = 1.;
+                    self.close_viewer(cx);
+                    return;
+                }
+                self.snap_back(dx, dy, ds, cx);
+            }
+            DragMode::Page => {
+                let mut start_dx = dx;
+                if dx.abs() > width * PAGE_FRACTION {
+                    if dx < 0. && v.index + 1 < count {
+                        v.index += 1;
+                        v.reset_view();
+                        start_dx = dx + width;
+                    } else if dx > 0. && v.index > 0 {
+                        v.index -= 1;
+                        v.reset_view();
+                        start_dx = dx - width;
+                    }
+                }
+                self.snap_back(start_dx, 0., 1., cx);
+                self.refresh_details(cx);
+            }
+            _ => {
+                v.dx = 0.;
+                v.dy = 0.;
+                v.ds = 1.;
             }
         }
-        self.refresh_details(cx);
         cx.notify();
+    }
+
+    /// Eases the drag offset and scale back to rest (or to the new page's place) over a short moment.
+    fn snap_back(&mut self, dx0: f32, dy0: f32, ds0: f32, cx: &mut Context<Self>) {
+        let Some(v) = self.viewer.as_mut() else { return };
+        v.dx = dx0;
+        v.dy = dy0;
+        v.ds = ds0;
+        v.snap_id += 1;
+        let id = v.snap_id;
+        cx.spawn(async move |this, cx| {
+            const STEPS: u32 = 18;
+            for i in 1..=STEPS {
+                cx.background_executor().timer(Duration::from_millis(16)).await;
+                let t = i as f32 / STEPS as f32;
+                let e = 1. - (1. - t).powi(3);
+                let alive = this
+                    .update(cx, |th, cx| {
+                        let Some(v) = th.viewer.as_mut().filter(|v| v.snap_id == id) else { return false };
+                        v.dx = dx0 * (1. - e);
+                        v.dy = dy0 * (1. - e);
+                        v.ds = ds0 + (1. - ds0) * e;
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !alive {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// Double-tap toggles between fit and a closer look at the tapped point.
@@ -225,6 +347,9 @@ impl Immagine {
     }
 
     fn wheel(&mut self, e: &ScrollWheelEvent, cx: &mut Context<Self>) {
+        if matches!(e.source, ScrollSource::Touch) {
+            return; // single-finger drags come from the raw pointer listener (see `pinch`)
+        }
         let Some(v) = self.viewer.as_mut().filter(|v| !v.closing) else { return };
         let delta = e.delta.pixel_delta(px(16.));
         let (dx, dy): (f32, f32) = (delta.x.into(), delta.y.into());
@@ -242,16 +367,32 @@ impl Immagine {
     }
 
     fn pinch(&mut self, event: Pinch, cx: &mut Context<Self>) {
+        let width = self.viewer.as_ref().map(|v| v.viewport.get().0).unwrap_or(0.);
+        match event {
+            Pinch::Down { x, y } => return self.drag_start(point(px(x), px(y)), cx),
+            Pinch::Drag { x, y } => return self.drag_move(point(px(x), px(y)), cx),
+            Pinch::Up { x, y } => {
+                if x >= 0. {
+                    self.drag_move(point(px(x), px(y)), cx);
+                }
+                return self.drag_end(width, cx);
+            }
+            _ => {}
+        }
         let Some(v) = self.viewer.as_mut().filter(|v| !v.closing) else { return };
         match event {
             Pinch::Begin => {
                 v.pinching = true;
                 v.start = None;
+                v.mode = DragMode::None;
+                v.snap_id += 1;
                 v.dx = 0.;
                 v.dy = 0.;
+                v.ds = 1.;
             }
             Pinch::Move { ratio, x, y } => v.zoom_to(v.zoom * ratio, (x, y)),
             Pinch::End => v.pinching = false,
+            _ => {}
         }
         cx.notify();
     }
@@ -358,6 +499,7 @@ impl Immagine {
         let (vw, vh): (f32, f32) = (vs.width.into(), vs.height.into());
         v.viewport.set((vw, vh));
         let (index, closing, dx, dy, zoom, pan) = (v.index, v.closing, v.dx, v.dy, v.zoom, v.pan);
+        let (ds, anchor, release) = (v.ds, v.anchor, v.release);
         let from = v.from.map(|b| {
             let (x, y): (f32, f32) = (b.origin.x.into(), b.origin.y.into());
             let (w, h): (f32, f32) = (b.size.width.into(), b.size.height.into());
@@ -386,14 +528,15 @@ impl Immagine {
             let full = if k == index && zoom > FULLSIZE_ZOOM { thumbs::get(&store, &format!("f:{}", item.id), || url("fullsize"), cx) } else { None };
             pictures.insert(k, [thumb, preview, full]);
         }
-        let page = move |k: usize| -> Option<AnyElement> {
+        let page = move |k: usize, cover: bool| -> Option<AnyElement> {
             let layers = pictures.get(&k)?;
             let mut page = div().size_full();
             for image in layers.iter().flatten() {
-                page = page.child(img(image.clone()).absolute().size_full().object_fit(ObjectFit::Contain));
+                page = page.child(img(image.clone()).absolute().size_full().object_fit(if cover { ObjectFit::Cover } else { ObjectFit::Contain }));
             }
             Some(page.into_any_element())
         };
+        let aspect = current.as_ref().and_then(|i| i.ratio).filter(|r| *r > 0.).map(|r| r as f32).unwrap_or(vw / vh);
         let date = current.as_ref().map(|i| i.date_bucket.clone()).unwrap_or_default();
         let is_video = current.as_ref().is_some_and(|i| i.is_video());
         let favorite = current.as_ref().is_some_and(|i| i.is_favorite);
@@ -471,26 +614,44 @@ impl Immagine {
                         .with_animation(("viewer-anim", v.serial), anim(if closing { 360 } else { 420 }), move |el, d| {
                             let t = if closing { 1. - d } else { d };
                             // While dragging down the backdrop fades and the photo follows the finger.
-                            let fade = (1. - dy / 400.).clamp(0.3, 1.);
-                            let settled = t >= 1.;
-                            let (x0, y0, w, h) = match from {
-                                Some((fx, fy, fw, fh)) if !settled => (lerp(fx, 0., t), lerp(fy, 0., t), lerp(fw, vw, t), lerp(fh, vh, t)),
-                                _ if settled => {
-                                    let (w, h) = (vw * zoom, vh * zoom);
-                                    ((vw - w) / 2. + pan.0 + dx, (vh - h) / 2. + pan.1 + dy, w, h)
-                                }
+                            let fade = match release {
+                                Some(r) if closing => r.fade,
+                                _ => (1. - dy / (vh * 0.5)).clamp(0.3, 1.),
+                            };
+                            let settled = t >= 1. && !closing;
+                            // Opening and closing morph a box between the grid tile and the aspect-fitted photo, with the
+                            // image covering the box: it is cropped like the tile at one end and exactly the photo at the
+                            // other, so its aspect ratio never differs from the tile's at the end of the animation.
+                            let target = match release {
+                                Some(r) if closing => r.rect,
                                 _ => (0., 0., vw, vh),
                             };
+                            let (x0, y0, w, h, cover) = match from {
+                                Some((fx, fy, fw, fh)) if !settled => {
+                                    let (tx, ty, tw, th) = fit(target, aspect);
+                                    (lerp(fx, tx, t), lerp(fy, ty, t), lerp(fw, tw, t), lerp(fh, th, t), true)
+                                }
+                                _ if !settled => (target.0, target.1, target.2, target.3, false),
+                                _ => {
+                                    let (w, h) = (vw * zoom * ds, vh * zoom * ds);
+                                    if zoom == 1. {
+                                        (anchor.0 - anchor.0 * ds + dx, anchor.1 - anchor.1 * ds + dy, w, h, false)
+                                    } else {
+                                        ((vw - w) / 2. + pan.0 + dx, (vh - h) / 2. + pan.1 + dy, w, h, false)
+                                    }
+                                }
+                            };
+                            let backdrop = t * fade;
                             let mut el = el
-                                .child(div().absolute().size_full().bg(rgba(0x000000ff)).opacity(t * fade))
-                                .child(div().absolute().left(px(x0)).top(px(y0)).w(px(w)).h(px(h)).children(page(index)));
-                            if settled && zoom == 1. {
+                                .child(div().absolute().size_full().bg(rgba(0x000000ff)).opacity(backdrop))
+                                .child(div().absolute().left(px(x0)).top(px(y0)).w(px(w)).h(px(h)).overflow_hidden().children(page(index, cover)));
+                            if settled && zoom == 1. && ds >= 0.999 && dy.abs() < 0.5 {
                                 // Neighbours slide in beside the current page.
                                 if index > 0 {
-                                    el = el.child(div().absolute().left(px(dx - vw)).top_0().w(px(vw)).h(px(vh)).children(page(index - 1)));
+                                    el = el.child(div().absolute().left(px(dx - vw)).top_0().w(px(vw)).h(px(vh)).children(page(index - 1, false)));
                                 }
                                 if index + 1 < count {
-                                    el = el.child(div().absolute().left(px(dx + vw)).top_0().w(px(vw)).h(px(vh)).children(page(index + 1)));
+                                    el = el.child(div().absolute().left(px(dx + vw)).top_0().w(px(vw)).h(px(vh)).children(page(index + 1, false)));
                                 }
                             }
                             el.child(
@@ -536,18 +697,10 @@ impl Immagine {
                         )
                 }))
                 .children((!closing).then(|| {
-                    glass_div(GLASS_TINT_DARK, 18.)
-                        .id("viewer-done")
+                    super::icons::back_chip(GLASS_TINT_DARK, "viewer-done", rgb(0xffffff).into())
                         .absolute()
                         .top(px(top + 8.))
-                        .right(px(16.))
-                        .h(px(36.))
-                        .px_4()
-                        .flex()
-                        .items_center()
-                        .text_color(rgb(0xffffff))
-                        .text_size(px(17.))
-                        .child("Fertig")
+                        .left(px(16.))
                         .on_click(cx.listener(|this, _, _, cx| this.close_viewer(cx)))
                 }))
                 .into_any_element(),

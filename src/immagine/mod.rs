@@ -6,6 +6,7 @@
 mod albums;
 mod login;
 mod people;
+mod icons;
 mod tab_bar;
 mod thumbs;
 mod timeline;

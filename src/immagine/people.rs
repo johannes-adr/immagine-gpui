@@ -327,16 +327,10 @@ impl Immagine {
         };
         let name = page.person.display_name().to_string();
 
-        let back = div()
-            .id("person-back")
-            .text_size(px(17.))
-            .text_color(rgb(BLUE))
-            .active(|s| s.opacity(0.6))
-            .child("Zurück")
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.people.open = None;
-                cx.notify();
-            }));
+        let back = div().flex().flex_row().child(super::icons::back_chip(p.glass_tint, "person-back", rgb(BLUE).into()).on_click(cx.listener(|this, _, _, cx| {
+            this.people.open = None;
+            cx.notify();
+        })));
 
         let header = div()
             .px_4()
