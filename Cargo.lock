@@ -2543,9 +2543,12 @@ version = "0.1.0"
 dependencies = [
  "futures-lite",
  "gpui-kit",
+ "js-sys",
  "serde",
  "serde_json",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
