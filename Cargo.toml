@@ -1,0 +1,18 @@
+[package]
+name = "gpui-web-demo"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+gpui-kit = { version = "0.8.1", default-features = false, features = ["component"] }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+wasm-bindgen = "0.2"
+
+# GPUI patched with a liquid-glass renderer pass (see vendor/).
+[patch.crates-io]
+gpui-pre = { path = "vendor/gpui-pre" }
+gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }

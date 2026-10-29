@@ -1,0 +1,6 @@
+target/
+www/pkg/
+certs/
+*.log
+# Proprietary system fonts: supply your own (see README)
+assets/*.ttf

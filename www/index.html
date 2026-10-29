@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#cfe3ff">
+  <title>Reminders</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none;
+      background: #cfe3ff; -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }
+    @media (prefers-color-scheme: dark) { html, body { background: #0b1026; } }
+    #probe { position: fixed; visibility: hidden; pointer-events: none;
+      padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+  </style>
+</head>
+<body>
+  <div id="probe"></div>
+  <script type="module">
+    import init, { run } from "./pkg/gpui_web_demo.js";
+    try {
+      const cs = getComputedStyle(document.getElementById("probe"));
+      await init();
+      run(parseFloat(cs.paddingTop) || 0, parseFloat(cs.paddingBottom) || 0,
+          matchMedia("(prefers-color-scheme: dark)").matches, !!navigator.gpu);
+    } catch (e) {
+      document.body.textContent = "Failed to load the application: " + e;
+    }
+  </script>
+</body>
+</html>
