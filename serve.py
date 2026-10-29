@@ -87,7 +87,7 @@ class H(http.server.SimpleHTTPRequestHandler):
         return super().send_head()
 
     def end_headers(self):
-        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
 class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
