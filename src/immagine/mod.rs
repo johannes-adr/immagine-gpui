@@ -70,6 +70,8 @@ pub(crate) struct Immagine {
     /// The timeline shows the newest photos at the bottom and starts scrolled there.
     timeline_scroll: UniformListScrollHandle,
     timeline_placed: std::cell::Cell<bool>,
+    /// Rubber band at the ends of the timeline.
+    overscroll: std::cell::Cell<timeline::Over>,
     thumb_at: f64,
     /// Screen bounds of the tiles painted last, so the viewer can zoom out of the tapped one.
     tile_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
@@ -141,6 +143,7 @@ impl Immagine {
             thumb_gen: 0,
             timeline_scroll: UniformListScrollHandle::new(),
             timeline_placed: std::cell::Cell::new(false),
+            overscroll: Default::default(),
             thumb_at: 0.,
             tile_bounds: Rc::new(RefCell::new(HashMap::new())),
             grid_bounds: Rc::new(std::cell::Cell::new(Bounds::default())),
@@ -317,6 +320,7 @@ impl Immagine {
 impl Render for Immagine {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::new(self.dark);
+        self.overscroll_tick(window);
         let background = if self.dark { rgb(0x000000) } else { rgb(0xffffff) };
         let content = match self.screen {
             Screen::Loading => div().into_any_element(),

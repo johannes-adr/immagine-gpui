@@ -3,11 +3,27 @@
 use super::{thumbs, Immagine};
 use crate::components::glass::glass_blur;
 use crate::theme::Palette;
+use crate::util::now_ms;
 use crate::logic::models::timeline::TimelineItem;
 use gpui_kit::*;
 use std::rc::Rc;
 
 const GAP: f32 = 2.;
+/// How far the timeline can be pulled past its ends, and how long it takes to spring back.
+const MAX_OVERSCROLL: f32 = 150.;
+const BOUNCE_MS: f64 = 380.;
+/// The finger counts as lifted when no scroll event arrived for this long.
+const QUIET_MS: f64 = 70.;
+
+/// Rubber band state: the offset past the end (positive pulls the content down), when the last scroll event
+/// came in and, once released, when the spring-back began and from where.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Over {
+    value: f32,
+    last: f64,
+    from: f32,
+    released_at: f64,
+}
 
 impl Immagine {
     /// A virtualized, scrollable photo grid with a spacer for the tab bar at its end. Tapping a tile opens the
@@ -28,7 +44,7 @@ impl Immagine {
         let cell = ((vw - GAP * (columns as f32 - 1.)) / columns as f32).floor();
         let rows = items.len().div_ceil(columns);
         let items_empty = items.is_empty();
-        let footer = self.bottom.max(10.) + 104.;
+        let footer = self.bottom.max(10.) + 76.;
 
         let origin = self.origin.clone();
         let placeholder = p.chip;
@@ -117,11 +133,63 @@ impl Immagine {
         // timeline, which fills the screen, gets an explicit one.)
         let vh: f32 = window.viewport_size().height.into();
         let list = if lead > 0. {
-            div().absolute().top(px(shift_top)).left_0().w_full().h(px(vh - shift_top - shift_bottom)).child(list)
+            div().absolute().top(px(shift_top + self.overscroll.get().value)).left_0().w_full().h(px(vh - shift_top - shift_bottom)).child(list)
         } else {
             div().size_full().child(list)
         };
         div().flex_1().relative().child(list).child(canvas(move |bounds, _, _| grid_bounds.set(bounds), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
+    }
+
+    /// Called for every scroll event before the list sees it (capture phase). Returns true when the event was used up
+    /// by the rubber band: the list is at an end and the finger pushes on, or the band is pulled out and the finger
+    /// comes back.
+    pub(super) fn overscroll_event(&mut self, dy: f32, cx: &mut Context<Self>) -> bool {
+        if self.tab != 0 || self.screen != super::Screen::Timeline || self.viewer.as_ref().is_some_and(|v| !v.closing) {
+            return false;
+        }
+        let handle = self.timeline_scroll.0.borrow().base_handle.clone();
+        let (offset, max): (f32, f32) = (handle.offset().y.into(), handle.max_offset().y.into());
+        let (at_top, at_bottom) = (offset >= -0.5, offset <= -max + 0.5);
+        let mut o = self.overscroll.get();
+        let pulled = o.value != 0.;
+        let outward = (at_top && dy > 0.) || (at_bottom && dy < 0.);
+        if !pulled && !outward {
+            return false;
+        }
+        // Pushing on gets harder the farther out it is; coming back is one to one.
+        let moving_out = o.value == 0. || (o.value > 0.) == (dy > 0.);
+        let step = if moving_out { dy * 0.5 / (1. + o.value.abs() / 90.) } else { dy };
+        let next = o.value + step;
+        o.value = if o.value != 0. && (next > 0.) != (o.value > 0.) { 0. } else { next.clamp(-MAX_OVERSCROLL, MAX_OVERSCROLL) };
+        o.last = now_ms();
+        o.released_at = 0.;
+        self.overscroll.set(o);
+        cx.notify();
+        true
+    }
+
+    /// Springs the band back once the finger is gone; asks for frames until it is at rest.
+    pub(super) fn overscroll_tick(&self, window: &mut Window) {
+        let mut o = self.overscroll.get();
+        if o.value == 0. {
+            return;
+        }
+        let now = now_ms();
+        if o.released_at == 0. {
+            if now - o.last < QUIET_MS {
+                window.request_animation_frame();
+                return;
+            }
+            o.released_at = now;
+            o.from = o.value;
+        }
+        let t = ((now - o.released_at) / BOUNCE_MS).clamp(0., 1.) as f32;
+        let e = 1. - (1. - t).powi(3);
+        o.value = if t >= 1. { 0. } else { o.from * (1. - e) };
+        self.overscroll.set(o);
+        if o.value != 0. {
+            window.request_animation_frame();
+        }
     }
 
     pub(super) fn timeline_view(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -135,6 +203,7 @@ impl Immagine {
         div()
             .size_full()
             .relative()
+            .child(overscroll_input(cx.weak_entity()))
             .child(div().absolute().top_0().left_0().size_full().flex().flex_col().child(list))
             .child(
                 div()
@@ -182,4 +251,25 @@ impl Immagine {
                     ),
             )
     }
+}
+
+/// Feeds scroll events to the rubber band before the list gets them (window listener, capture phase).
+fn overscroll_input(view: WeakEntity<Immagine>) -> Canvas<()> {
+    canvas(
+        |_, _, _| {},
+        move |_, _, window, _| {
+            let view = view.clone();
+            window.on_mouse_event(move |e: &ScrollWheelEvent, phase, _, cx| {
+                if phase != DispatchPhase::Capture {
+                    return;
+                }
+                let dy: f32 = e.delta.pixel_delta(px(16.)).y.into();
+                if dy != 0. && view.update(cx, |t, cx| t.overscroll_event(dy, cx)).unwrap_or(false) {
+                    cx.stop_propagation();
+                }
+            });
+        },
+    )
+    .absolute()
+    .size_0()
 }
