@@ -5,7 +5,7 @@
 //! LRU, runs at most `MAX_ACTIVE` loads at once, and drops requests for tiles that scrolled away before their
 //! turn. Images are `RenderImage`s (BGRA) that GPUI paints through `img(Arc<RenderImage>)`.
 
-use super::Immagine;
+use super::{downloads::DOWNLOAD_DB, Immagine};
 use crate::logic::thumbhash;
 use crate::host::{Current as H, Decoded, Host};
 use gpui_kit::*;
@@ -49,11 +49,13 @@ pub(super) struct Thumbs {
     active: usize,
     bytes: usize,
     view: WeakEntity<Immagine>,
+    /// Assets kept in IndexedDB (shared with `Downloads`): their renditions are read from there before the network.
+    local: Rc<RefCell<HashSet<String>>>,
 }
 
 pub(super) type SharedThumbs = Rc<RefCell<Thumbs>>;
 
-pub(super) fn new(view: WeakEntity<Immagine>) -> SharedThumbs {
+pub(super) fn new(view: WeakEntity<Immagine>, local: Rc<RefCell<HashSet<String>>>) -> SharedThumbs {
     Rc::new(RefCell::new(Thumbs {
         images: HashMap::new(),
         pending: HashSet::new(),
@@ -65,6 +67,7 @@ pub(super) fn new(view: WeakEntity<Immagine>) -> SharedThumbs {
         active: 0,
         bytes: 0,
         view,
+        local,
     }))
 }
 
@@ -190,8 +193,24 @@ fn pump(store: &SharedThumbs, cx: &mut App) {
             job
         };
         let store = store.clone();
+        // Key `t:<id>` / `p:<id>` / `f:<id>`: a downloaded asset has its thumbnail and preview stored under the same
+        // keys and its original under the bare id (the full-size rendition is decoded from it).
+        let local = job.key.split_once(':').filter(|(_, id)| store.borrow().local.borrow().contains(*id)).map(|(kind, id)| {
+            let blob = if kind == "f" { id.to_string() } else { job.key.clone() };
+            blob
+        });
         cx.spawn(async move |cx| {
-            let result = H::decode_url(&job.url).await;
+            let stored = match local {
+                Some(blob) => match H::blob_get(DOWNLOAD_DB, &blob).await {
+                    Ok(Some(bytes)) if !bytes.is_empty() => H::decode_bytes(bytes).await.ok(),
+                    _ => None,
+                },
+                None => None,
+            };
+            let result = match stored {
+                Some(decoded) => Ok(decoded),
+                None => H::decode_url(&job.url).await,
+            };
             let _ = cx.update(|app| finish(&store, job.key, result, app));
         })
         .detach();

@@ -70,6 +70,15 @@ pub async fn get(db_name: &str, key: &str) -> Result<Option<Vec<u8>>, String> {
     Ok(if value.is_undefined() { None } else { Some(Uint8Array::new(&value).to_vec()) })
 }
 
+pub async fn delete(db_name: &str, key: &str) -> Result<(), String> {
+    let db = open(db_name).await?;
+    let tx = db.transaction_with_str_and_mode(STORE, IdbTransactionMode::Readwrite).map_err(err)?;
+    tx.object_store(STORE).map_err(err)?.delete(&JsValue::from_str(key)).map_err(err)?;
+    once(&tx, "complete", "error").await.map_err(err)?;
+    db.close();
+    Ok(())
+}
+
 pub async fn clear(db_name: &str) -> Result<(), String> {
     let db = open(db_name).await?;
     let tx = db.transaction_with_str_and_mode(STORE, IdbTransactionMode::Readwrite).map_err(err)?;
@@ -77,4 +86,38 @@ pub async fn clear(db_name: &str) -> Result<(), String> {
     once(&tx, "complete", "error").await.map_err(err)?;
     db.close();
     Ok(())
+}
+
+/// Every key of `db_name`.
+pub async fn keys(db_name: &str) -> Result<Vec<String>, String> {
+    let all = js_sys::Function::new_with_args(
+        "name",
+        "return new Promise((res,rej)=>{const r=indexedDB.open(name,1);\
+         r.onupgradeneeded=()=>r.result.createObjectStore('kv');\
+         r.onerror=()=>rej('IndexedDB');\
+         r.onsuccess=()=>{const db=r.result;\
+         const q=db.transaction('kv','readonly').objectStore('kv').getAllKeys();\
+         q.onsuccess=()=>{db.close();res(q.result.map(String))};\
+         q.onerror=()=>{db.close();rej('IndexedDB')}}})",
+    );
+    let promise = all.call1(&JsValue::NULL, &JsValue::from_str(db_name)).map_err(err)?;
+    let value = JsFuture::from(Promise::from(promise)).await.map_err(err)?;
+    Ok(js_sys::Array::from(&value).iter().filter_map(|k| k.as_string()).collect())
+}
+
+/// Total `byteLength` of every value in `db_name` (a cursor walk, so values pass through JS memory once).
+pub async fn size(db_name: &str) -> Result<u64, String> {
+    let walk = js_sys::Function::new_with_args(
+        "name",
+        "return new Promise((res,rej)=>{const r=indexedDB.open(name,1);\
+         r.onupgradeneeded=()=>r.result.createObjectStore('kv');\
+         r.onerror=()=>rej('IndexedDB');\
+         r.onsuccess=()=>{const db=r.result;let n=0;\
+         const c=db.transaction('kv','readonly').objectStore('kv').openCursor();\
+         c.onsuccess=()=>{const cur=c.result;if(cur){n+=(cur.value&&cur.value.byteLength)||0;cur.continue()}else{db.close();res(n)}};\
+         c.onerror=()=>{db.close();rej('IndexedDB')}}})",
+    );
+    let promise = walk.call1(&JsValue::NULL, &JsValue::from_str(db_name)).map_err(err)?;
+    let value = JsFuture::from(Promise::from(promise)).await.map_err(err)?;
+    Ok(value.as_f64().unwrap_or(0.) as u64)
 }

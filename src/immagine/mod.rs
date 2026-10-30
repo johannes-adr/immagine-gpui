@@ -4,12 +4,14 @@
 //! UI never borrows the store while it is being written. The UI reads a copy of the timeline.
 
 mod albums;
+mod downloads;
 mod login;
 mod people;
 mod range_views;
 mod slider;
 mod icons;
 mod search;
+mod settings;
 mod tab_bar;
 mod thumbs;
 mod timeline;
@@ -131,6 +133,8 @@ pub(crate) struct Immagine {
     albums: albums::AlbumsState,
     people: people::PeopleState,
     search: search::SearchState,
+    settings: settings::SettingsState,
+    downloads: downloads::Downloads,
 }
 
 /// The timeline is stored newest first; the grid reads oldest first, so the newest photos sit at the bottom.
@@ -184,6 +188,7 @@ impl Immagine {
         .detach();
 
         let origin = H::origin();
+        let downloads = downloads::Downloads::default();
         let mut this = Self {
             screen: Screen::Loading,
             origin,
@@ -242,14 +247,17 @@ impl Immagine {
             grid_bounds: Rc::new(std::cell::Cell::new(Bounds::default())),
             viewer: None,
             viewer_serial: 0,
-            thumbs: thumbs::new(cx.weak_entity()),
+            thumbs: thumbs::new(cx.weak_entity(), downloads.ids.clone()),
             pinch: None,
             albums: Default::default(),
             people: Default::default(),
             search: Default::default(),
+            settings: Default::default(),
+            downloads,
         };
         this.resume(cx);
         this.ensure_gestures(cx);
+        this.load_downloads(cx);
         this
     }
 
@@ -370,7 +378,10 @@ impl Immagine {
         self.viewer = None;
         self.tab = 0;
         self.screen = Screen::Login;
+        self.downloads.ids.borrow_mut().clear();
+        self.downloads.busy.clear();
         cx.spawn(async move |_, _| {
+            let _ = H::blob_clear(downloads::DOWNLOAD_DB).await;
             let _ = H::blob_put(DB, SNAPSHOT_KEY, b"").await;
         })
         .detach();
@@ -447,7 +458,7 @@ impl Immagine {
     /// The scroll handle of whatever scrolls on screen now, for the rubber band; `None` while the viewer is open
     /// or on screens without a scroll view.
     fn active_scroll(&self) -> Option<ScrollHandle> {
-        if self.screen != Screen::Timeline || self.viewer.as_ref().is_some_and(|v| !v.closing) {
+        if self.screen != Screen::Timeline || self.viewer.as_ref().is_some_and(|v| !v.closing) || self.settings.sheet.visible() {
             return None;
         }
         let list = |h: &UniformListScrollHandle| h.0.borrow().base_handle.clone();
@@ -474,6 +485,7 @@ impl Render for Immagine {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::new(self.dark);
         self.rubber.tick(window);
+        self.settings.sheet.tick(window);
         self.grid_default(window.viewport_size().width.into());
         self.grid_tick(window);
         let background = if self.dark { rgb(0x000000) } else { rgb(0xffffff) };
@@ -502,6 +514,7 @@ impl Render for Immagine {
             }
         });
         let viewer = if self.screen == Screen::Timeline { self.viewer_overlay(window, cx) } else { None };
+        let settings = if self.screen == Screen::Timeline { self.settings_overlay(&p, window, cx) } else { None };
         div()
             .size_full()
             .relative()
@@ -512,6 +525,10 @@ impl Render for Immagine {
             .child(self.grid_input(cx))
             .child(rubber_band::input(cx.weak_entity(), |this, dy, phase, window| {
                 // While the grid zooms, the first finger of the pinch must not also scroll the list or start a fling.
+                if this.settings.sheet.visible() {
+                    window.cancel_touch_momentum();
+                    return (true, false);
+                }
                 if this.grid_zooming() {
                     window.cancel_touch_momentum();
                     return (true, false);
@@ -525,6 +542,7 @@ impl Render for Immagine {
             .child(div().absolute().top_0().left_0().size_full().bg(rgba(0x00000001)))
             .children(viewer)
             .children(chrome.into_iter().flatten())
+            .children(settings)
             // FPS debug badge, re-enable when profiling:
             // .child(fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, self.webgpu))
     }

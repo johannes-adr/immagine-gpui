@@ -246,6 +246,7 @@ impl Immagine {
         let rows = items.len().div_ceil(columns);
         let items_empty = items.is_empty();
         let footer = self.bottom.max(10.) + 76.;
+        let downloaded = self.downloads.ids.clone();
 
         let origin = self.origin.clone();
         let placeholder = p.chip;
@@ -308,18 +309,39 @@ impl Immagine {
                             .when(!hidden, |d| d.bg(placeholder))
                             .overflow_hidden()
                             .children(picture.filter(|_| !hidden).map(|image| img(image).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Cover)))
-                            .children(badge.filter(|_| !hidden).map(|text| {
+                            .children((!hidden && cell >= 40.).then(|| {
+                                // Bottom row: a white heart at the left for favorites; at the right the video's length and a
+                                // tiny mark for photos kept in IndexedDB.
+                                let icon = if cell < 90. { 10. } else { 12. };
+                                let stored = downloaded.borrow().contains(&item.id);
                                 div()
                                     .absolute()
+                                    .left(px(4.))
                                     .right(px(4.))
                                     .bottom(px(4.))
-                                    .px(px(5.))
-                                    .py(px(1.))
-                                    .rounded(px(8.))
-                                    .bg(rgba(0x00000066))
-                                    .text_color(rgb(0xffffff))
-                                    .text_size(px(if cell < 90. { 10. } else { 12. }))
-                                    .child(text)
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(div().children(item.is_favorite.then(|| super::icons::heart_badge(icon, rgb(0xffffff).into()))))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap(px(3.))
+                                            .children(badge.map(|text| {
+                                                div()
+                                                    .px(px(5.))
+                                                    .py(px(1.))
+                                                    .rounded(px(8.))
+                                                    .bg(rgba(0x00000066))
+                                                    .text_color(rgb(0xffffff))
+                                                    .text_size(px(icon))
+                                                    .child(text)
+                                            }))
+                                            .children(stored.then(|| super::icons::glyph(super::icons::Glyph::Downloaded, icon, rgb(0xffffff).into()))),
+                                    )
                             }))
                             .child(
                                 canvas(

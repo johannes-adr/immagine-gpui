@@ -30,6 +30,17 @@ pub struct Decoded {
 
 pub use crate::logic::movie::Chunk;
 
+/// What the settings sheet shows about the installation. Platforms without a notion of it return the defaults.
+#[derive(Clone, Debug, Default)]
+pub struct AppInfo {
+    /// Version of the installed app shell (web: the service worker's cache name, `None` without a service worker).
+    pub pwa_version: Option<String>,
+    /// Running as an installed app (web: standalone display mode).
+    pub standalone: bool,
+    /// The worker threads are usable (web: the page is cross-origin isolated).
+    pub threads: bool,
+}
+
 /// Answer to a range request.
 pub struct RangeResponse {
     pub bytes: Vec<u8>,
@@ -135,8 +146,20 @@ pub trait Host: 'static {
     /// Large opaque blobs (the store snapshot), namespaced by `db`.
     async fn blob_get(db: &str, key: &str) -> Result<Option<Vec<u8>>, String>;
     async fn blob_put(db: &str, key: &str, bytes: &[u8]) -> Result<(), String>;
+    /// Deletes one blob (no error if it is not there).
+    async fn blob_delete(db: &str, key: &str) -> Result<(), String>;
     /// Deletes every blob of `db`.
     async fn blob_clear(db: &str) -> Result<(), String>;
+
+    /// Bytes stored in `db` (web: IndexedDB values, desktop: its files).
+    async fn blob_size(db: &str) -> Result<u64, String>;
+    /// Keys stored in `db`.
+    async fn blob_keys(db: &str) -> Result<Vec<String>, String>;
+    /// Installation details for the settings sheet.
+    async fn app_info() -> AppInfo;
+
+    /// Decodes an image already in memory (a stored download).
+    async fn decode_bytes(bytes: Vec<u8>) -> Result<Decoded, String>;
 
     /// Downloads an image with the session's credentials and decodes it to pixels.
     async fn decode_url(url: &str) -> Result<Decoded, String>;

@@ -294,7 +294,26 @@ impl Immagine {
         };
         let subtitle = format!("{} Ordner · {}", folders.len(), count_label(albums.len(), "Album", "Alben"));
         header = header
-            .child(div().text_size(px(34.)).font_weight(FontWeight::BOLD).truncate().child(title))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(div().flex_1().min_w_0().text_size(px(34.)).font_weight(FontWeight::BOLD).truncate().child(title))
+                    .child(
+                        glass_div(p.glass_tint, 18.)
+                            .id("albums-settings")
+                            .size(px(36.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .active(|s| s.opacity(0.6))
+                            .child(super::icons::glyph(super::icons::Glyph::Gear, 20., p.label))
+                            .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
+                    ),
+            )
             .child(div().text_size(px(15.)).text_color(p.secondary).child(subtitle));
 
         let body = if tiles.is_empty() {

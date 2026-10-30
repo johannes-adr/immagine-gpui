@@ -43,6 +43,9 @@ pub(super) enum Glyph {
     Trash,
     Search,
     Close,
+    Gear,
+    Download,
+    Downloaded,
     Play,
     Pause,
 }
@@ -115,6 +118,27 @@ pub(super) fn glyph(kind: Glyph, size: f32, color: Rgba) -> Canvas<()> {
                     stroke(&[(5., 5.), (19., 19.)], window);
                     stroke(&[(19., 5.), (5., 19.)], window);
                 }
+                Glyph::Gear => {
+                    let mut pts = Vec::new();
+                    for i in 0..8 {
+                        let c = i as f32 * std::f32::consts::TAU / 8.;
+                        for (da, r) in [(-0.2_f32, 7.6_f32), (-0.13, 10.), (0.13, 10.), (0.2, 7.6)] {
+                            pts.push((12. + r * (c + da).cos(), 12. + r * (c + da).sin()));
+                        }
+                    }
+                    pts.push(pts[0]);
+                    stroke(&pts, window);
+                    stroke(&circle(12., 12., 3.2), window);
+                }
+                Glyph::Download | Glyph::Downloaded => {
+                    stroke(&[(4., 15.), (4., 20.5), (20., 20.5), (20., 15.)], window);
+                    if matches!(kind, Glyph::Download) {
+                        stroke(&[(12., 3.), (12., 15.)], window);
+                        stroke(&[(7., 10.5), (12., 15.5), (17., 10.5)], window);
+                    } else {
+                        stroke(&[(6.5, 9.5), (10.8, 14.), (17.5, 4.5)], window);
+                    }
+                }
                 Glyph::Trash => {
                     stroke(&[(3.5, 6.), (20.5, 6.)], window);
                     stroke(&[(9., 6.), (9., 3.), (15., 3.), (15., 6.)], window);
@@ -123,6 +147,59 @@ pub(super) fn glyph(kind: Glyph, size: f32, color: Rgba) -> Canvas<()> {
                     stroke(&[(14., 10.), (14., 17.)], window);
                 }
             }
+        },
+    )
+    .size(px(size))
+}
+
+/// A small filled heart (grid badge).
+pub(super) fn heart_badge(size: f32, color: Rgba) -> Canvas<()> {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let (x, y): (f32, f32) = (bounds.origin.x.into(), bounds.origin.y.into());
+            let k = f32::from(bounds.size.width) / 24.;
+            let at = |px_: f32, py_: f32| point(px(x + px_ * k), px(y + py_ * k));
+            let mut b = PathBuilder::fill();
+            b.move_to(at(12., 21.5));
+            b.curve_to(at(2.2, 8.2), at(2., 14.5));
+            b.curve_to(at(7.2, 3.), at(2.5, 3.));
+            b.curve_to(at(12., 6.8), at(10.8, 3.));
+            b.curve_to(at(16.8, 3.), at(13.2, 3.));
+            b.curve_to(at(21.8, 8.2), at(21.5, 3.));
+            b.curve_to(at(12., 21.5), at(22., 14.5));
+            b.close();
+            if let Ok(path) = b.build() {
+                window.paint_path(path, color);
+            }
+        },
+    )
+    .size(px(size))
+}
+
+/// A progress ring: a faint track and an arc from the top, clockwise, for `fraction` (0..1) of the circle.
+pub(super) fn progress_ring(fraction: f32, size: f32, color: Rgba) -> Canvas<()> {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let (x, y): (f32, f32) = (bounds.origin.x.into(), bounds.origin.y.into());
+            let r = size / 2. - 2.;
+            let (cx_, cy_) = (x + size / 2., y + size / 2.);
+            let arc = |from: f32, sweep: f32, color: Rgba, window: &mut Window| {
+                let steps = ((sweep / std::f32::consts::TAU) * 48.).ceil().max(2.) as usize;
+                let mut b = PathBuilder::stroke(px(2.4));
+                for i in 0..=steps {
+                    let a = from + sweep * i as f32 / steps as f32;
+                    let p = point(px(cx_ + r * a.cos()), px(cy_ + r * a.sin()));
+                    if i == 0 { b.move_to(p) } else { b.line_to(p) }
+                }
+                if let Ok(path) = b.build() {
+                    window.paint_path(path, color);
+                }
+            };
+            let top = -std::f32::consts::FRAC_PI_2;
+            arc(top, std::f32::consts::TAU, Rgba { a: color.a * 0.3, ..color }, window);
+            arc(top, std::f32::consts::TAU * fraction.clamp(0.04, 1.), color, window);
         },
     )
     .size(px(size))

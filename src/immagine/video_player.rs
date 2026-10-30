@@ -29,7 +29,7 @@ const READ_AHEAD_BYTES: u64 = 8 * 1024 * 1024;
 /// arrive, and what was evicted is read back from there instead of downloaded again.
 const MEM_BUDGET: u64 = 96 * 1024 * 1024;
 const MEM_KEEP: u64 = MEM_BUDGET * 3 / 4;
-const DISK_DB: &str = "video-cache";
+pub(super) const DISK_DB: &str = "video-cache";
 /// Consecutive failed range requests before the player gives up, and the pause between tries.
 const MAX_FAILURES: u32 = 3;
 const RETRY_MS: f64 = 1000.;
@@ -173,7 +173,7 @@ pub(super) struct Player {
 impl Player {
     /// Starts downloading `url` and playing it as soon as it is ready. Call from the tap that asked for playback
     /// (the audio output can only be unlocked there).
-    pub(super) fn open<T: 'static>(url: String, cx: &mut Context<T>) -> Player {
+    pub(super) fn open<T: 'static>(url: String, local: Option<String>, cx: &mut Context<T>) -> Player {
         let inbox = Rc::new(RefCell::new(Inbox::default()));
         let task_inbox = inbox.clone();
         let task_url = url.clone();
@@ -183,7 +183,15 @@ impl Player {
         })
         .detach();
         cx.spawn(async move |this, cx| {
-            let opened = open_movie(&task_url, cx).await;
+            // A downloaded video plays from the stored file, with no request at all.
+            let stored = match local {
+                Some(id) => H::blob_get(super::downloads::DOWNLOAD_DB, &id).await.ok().flatten().filter(|b| !b.is_empty()),
+                None => None,
+            };
+            let opened = match stored {
+                Some(bytes) => open_full(bytes, cx).await,
+                None => open_movie(&task_url, cx).await,
+            };
             task_inbox.borrow_mut().opened = Some(opened);
             let _ = this.update(cx, |_, cx| cx.notify());
         })

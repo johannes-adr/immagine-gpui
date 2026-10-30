@@ -11,7 +11,7 @@ pub mod entry;
 mod http;
 mod store;
 
-use crate::host::{AudioConfig, AudioOutput, Chunk, Decoded, Host, Pinch, VideoConfig, VideoDecode};
+use crate::host::{AppInfo, AudioConfig, AudioOutput, Chunk, Decoded, Host, Pinch, VideoConfig, VideoDecode};
 use crate::logic::ports::Clock;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -86,6 +86,15 @@ impl Host for Desktop {
         .await
     }
 
+    async fn blob_delete(db: &str, key: &str) -> Result<(), String> {
+        let path = store::blob_path(db, key);
+        blocking::run(move || match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        })
+        .await
+    }
+
     async fn blob_clear(db: &str) -> Result<(), String> {
         let db = db.to_string();
         blocking::run(move || {
@@ -93,6 +102,21 @@ impl Host for Desktop {
             Ok(())
         })
         .await
+    }
+
+    async fn blob_size(db: &str) -> Result<u64, String> {
+        let db = db.to_string();
+        blocking::run(move || Ok(store::blob_size(&db))).await
+    }
+
+    async fn blob_keys(db: &str) -> Result<Vec<String>, String> {
+        let db = db.to_string();
+        blocking::run(move || Ok(store::blob_keys(&db))).await
+    }
+
+    /// No service worker, no installed-app mode, native threads: nothing to report.
+    async fn app_info() -> AppInfo {
+        AppInfo { threads: true, ..AppInfo::default() }
     }
 
     async fn blob_put(db: &str, key: &str, bytes: &[u8]) -> Result<(), String> {
@@ -106,6 +130,14 @@ impl Host for Desktop {
             let tmp = path.with_extension("tmp");
             std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
             std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+        })
+        .await
+    }
+
+    async fn decode_bytes(bytes: Vec<u8>) -> Result<Decoded, String> {
+        blocking::run(move || {
+            let image = image::load_from_memory(&bytes).map_err(|e| e.to_string())?.into_rgba8();
+            Ok(Decoded { width: image.width(), height: image.height(), rgba: image.into_raw() })
         })
         .await
     }

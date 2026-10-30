@@ -205,6 +205,10 @@ impl Viewer {
 
 impl Immagine {
     /// Id of the photo the viewer currently shows, so its grid tile can be drawn empty while the photo is on top.
+    pub(super) fn viewer_item(&self) -> Option<TimelineItem> {
+        self.viewer.as_ref().filter(|v| !v.closing).and_then(|v| v.items.get(v.index)).cloned()
+    }
+
     pub(super) fn viewer_item_id(&self) -> Option<String> {
         self.viewer.as_ref().and_then(|v| v.items.get(v.index)).map(|i| i.id.clone())
     }
@@ -463,6 +467,9 @@ impl Immagine {
     }
 
     fn pinch(&mut self, event: Pinch, cx: &mut Context<Self>) {
+        if self.settings.sheet.visible() {
+            return self.settings_pinch(event, cx);
+        }
         if self.viewer.is_none() {
             return self.grid_pinch(event, cx);
         }
@@ -786,7 +793,8 @@ impl Immagine {
         let Some(v) = self.viewer.as_mut().filter(|v| !v.closing) else { return };
         let Some(item) = v.items.get(v.index).filter(|i| i.is_video()) else { return };
         let url = format!("{origin}/api/assets/{}/video/playback", item.id);
-        v.video = Some(Rc::new(RefCell::new(Player::open(url, cx))));
+        let local = self.downloads.ids.borrow().contains(&item.id).then(|| item.id.clone());
+        v.video = Some(Rc::new(RefCell::new(Player::open(url, local, cx))));
         cx.notify();
     }
 
@@ -1088,6 +1096,9 @@ impl Immagine {
         let date = current.as_ref().map(|i| i.date_bucket.clone()).unwrap_or_default();
         let is_video = current.as_ref().is_some_and(|i| i.is_video());
         let favorite = current.as_ref().is_some_and(|i| i.is_favorite);
+        let current_id = current.as_ref().map(|i| i.id.clone()).unwrap_or_default();
+        let downloaded = self.downloads.ids.borrow().contains(&current_id);
+        let downloading = self.downloads.busy.get(&current_id).copied();
         let playing = v.video.is_some();
         let bottom = self.bottom.max(10.);
 
@@ -1426,7 +1437,20 @@ impl Immagine {
                         .text_color(white)
                         .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(day))
                         .child(div().text_size(px(14.)).child(time));
-                    let spacer = div().w(px(44.)).h(px(44.));
+                    // Always occludes and always has a click handler (a no-op while busy or stored): without one the tap
+                    // falls through to the page and toggles the controls.
+                    let mut download = button("viewer-download", 44.).h(px(44.)).occlude();
+                    download = if downloaded {
+                        download.child(super::icons::glyph(super::icons::Glyph::Downloaded, 24., white))
+                    } else if let Some(fraction) = downloading {
+                        download.child(super::icons::progress_ring(fraction, 24., white))
+                    } else {
+                        download.active(|s| s.opacity(0.6)).child(super::icons::glyph(super::icons::Glyph::Download, 24., white))
+                    };
+                    if live {
+                        download = download.on_click(cx.listener(|this, _, _, cx| this.download_current(cx)));
+                    }
+                    let download = if downloaded { download.active(|s| s.opacity(0.6)) } else { download };
                     div()
                         .absolute()
                         .top(px(top + 2.))
@@ -1438,7 +1462,7 @@ impl Immagine {
                         .justify_between()
                         .child(back)
                         .child(title)
-                        .child(spacer)
+                        .child(download)
                 }))
                 .children(dialog)
                 .children(editor)

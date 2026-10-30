@@ -34,6 +34,34 @@ pub fn blob_clear(db: &str) {
     }
 }
 
+/// Total size of the blob files of `db`.
+pub fn blob_size(db: &str) -> u64 {
+    let prefix = format!("{}-", file_name(db));
+    let Ok(entries) = std::fs::read_dir(data_dir()) else { return 0 };
+    entries
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.starts_with(&prefix) && name.ends_with(".bin")
+        })
+        .filter_map(|e| e.metadata().ok())
+        .map(|m| m.len())
+        .sum()
+}
+
+/// Keys of the blob files of `db` (file names are the keys with unusual characters replaced, which ids do not have).
+pub fn blob_keys(db: &str) -> Vec<String> {
+    let prefix = format!("{}-", file_name(db));
+    let Ok(entries) = std::fs::read_dir(data_dir()) else { return Vec::new() };
+    entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.strip_prefix(&prefix)?.strip_suffix(".bin").map(str::to_string)
+        })
+        .collect()
+}
+
 fn setting_path(key: &str) -> PathBuf {
     data_dir().join("settings").join(file_name(key))
 }

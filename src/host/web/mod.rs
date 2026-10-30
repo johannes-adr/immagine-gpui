@@ -10,7 +10,7 @@ pub mod local_storage;
 pub mod pinch;
 pub mod selftest;
 
-use crate::host::{Decoded, Host, Pinch, VideoConfig};
+use crate::host::{AppInfo, Decoded, Host, Pinch, VideoConfig};
 
 /// `Date.now()` as the logic layer's clock.
 pub struct WebClock;
@@ -101,8 +101,44 @@ impl Host for Web {
         idb::put(db, key, bytes).await
     }
 
+    async fn blob_delete(db: &str, key: &str) -> Result<(), String> {
+        idb::delete(db, key).await
+    }
+
     async fn blob_clear(db: &str) -> Result<(), String> {
         idb::clear(db).await
+    }
+
+    async fn blob_size(db: &str) -> Result<u64, String> {
+        idb::size(db).await
+    }
+
+    async fn blob_keys(db: &str) -> Result<Vec<String>, String> {
+        idb::keys(db).await
+    }
+
+    async fn app_info() -> AppInfo {
+        let probe = js_sys::Function::new_no_args(
+            "return (async()=>{const k=('caches' in self)?await caches.keys():[];\
+             const v=k.filter(n=>n.startsWith('immagine-')).sort().pop();\
+             return JSON.stringify({v:v?v.slice(9):null,\
+             s:matchMedia('(display-mode: standalone)').matches||navigator.standalone===true,\
+             t:self.crossOriginIsolated===true})})()",
+        );
+        let text = match probe.call0(&wasm_bindgen::JsValue::NULL) {
+            Ok(promise) => wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(promise)).await.ok().and_then(|v| v.as_string()),
+            Err(_) => None,
+        };
+        let json: serde_json::Value = text.and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        AppInfo {
+            pwa_version: json["v"].as_str().map(str::to_string),
+            standalone: json["s"].as_bool().unwrap_or(false),
+            threads: json["t"].as_bool().unwrap_or(false),
+        }
+    }
+
+    async fn decode_bytes(bytes: Vec<u8>) -> Result<Decoded, String> {
+        image_loader::decode_bytes(&bytes).await
     }
 
     async fn decode_url(url: &str) -> Result<Decoded, String> {

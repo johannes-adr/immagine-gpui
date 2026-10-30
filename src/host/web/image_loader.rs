@@ -26,7 +26,19 @@ pub async fn decode_url(url: &str) -> Result<Decoded, String> {
         return Err(format!("HTTP {}", response.status()));
     }
     let blob: Blob = JsFuture::from(response.blob().map_err(js)?).await.map_err(js)?.dyn_into().map_err(js)?;
-    let bitmap: ImageBitmap = JsFuture::from(window.create_image_bitmap_with_blob(&blob).map_err(js)?)
+    decode_blob(&blob).await
+}
+
+/// Decodes encoded image bytes held in memory.
+pub async fn decode_bytes(bytes: &[u8]) -> Result<Decoded, String> {
+    let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
+    let blob = Blob::new_with_u8_array_sequence(&parts).map_err(js)?;
+    decode_blob(&blob).await
+}
+
+async fn decode_blob(blob: &Blob) -> Result<Decoded, String> {
+    let window = web_sys::window().ok_or("no window")?;
+    let bitmap: ImageBitmap = JsFuture::from(window.create_image_bitmap_with_blob(blob).map_err(js)?)
         .await
         .map_err(js)?
         .dyn_into()
