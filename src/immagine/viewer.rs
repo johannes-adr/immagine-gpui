@@ -156,7 +156,7 @@ impl Viewer {
 impl Immagine {
     /// Opens the viewer on `items[index]`, zooming out of the grid tile with that index if it was painted.
     pub(super) fn open_viewer(&mut self, items: Rc<Vec<TimelineItem>>, index: usize, cx: &mut Context<Self>) {
-        let from = self.tile_bounds.borrow().get(&index).copied();
+        let from = self.fresh_tile(index);
         self.viewer_serial += 1;
         self.viewer = Some(Viewer {
             items,
@@ -195,6 +195,12 @@ impl Immagine {
             });
         }
         cx.notify();
+    }
+
+    /// The tile painted for item `index` within the last couple of render passes (older entries are stale).
+    fn fresh_tile(&self, index: usize) -> Option<Bounds<Pixels>> {
+        let now = self.render_pass.get();
+        self.tile_bounds.borrow().get(&index).filter(|(_, pass)| pass + 2 >= now).map(|(b, _)| *b)
     }
 
     pub(super) fn close_viewer(&mut self, cx: &mut Context<Self>) {
@@ -544,7 +550,7 @@ impl Immagine {
         let close_done = v.close_done.clone();
         // Closing shrinks into the tile of the photo that is shown now (not the one the viewer was opened on); when
         // that tile is not on screen the photo just fades out.
-        let tile = if closing { self.tile_bounds.borrow().get(&index).copied().filter(|b| f32::from(b.origin.y) < vh && f32::from(b.origin.y + b.size.height) > 0.) } else { v.from };
+        let tile = if closing { self.fresh_tile(index).filter(|b| f32::from(b.origin.y) < vh && f32::from(b.origin.y + b.size.height) > 0.) } else { v.from };
         let from = tile.map(|b| {
             let (x, y): (f32, f32) = (b.origin.x.into(), b.origin.y.into());
             let (w, h): (f32, f32) = (b.size.width.into(), b.size.height.into());

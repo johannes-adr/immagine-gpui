@@ -68,7 +68,10 @@ pub(crate) struct Immagine {
     bubble_from: f32,
     thumb_gen: u32,
     /// Screen bounds of the tiles painted last, so the viewer can zoom out of the tapped one.
-    tile_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
+    /// Where each grid tile was last painted, with the render pass number of that paint. Entries older than a
+    /// couple of passes belong to tiles that are gone (scrolled off, or another screen's grid) and are ignored.
+    tile_bounds: Rc<RefCell<HashMap<usize, (Bounds<Pixels>, u64)>>>,
+    render_pass: Rc<std::cell::Cell<u64>>,
     grid_bounds: Rc<std::cell::Cell<Bounds<Pixels>>>,
     viewer: Option<viewer::Viewer>,
     viewer_serial: u32,
@@ -132,6 +135,7 @@ impl Immagine {
             bubble_from: 0.,
             thumb_gen: 0,
             tile_bounds: Rc::new(RefCell::new(HashMap::new())),
+            render_pass: Rc::new(std::cell::Cell::new(0)),
             grid_bounds: Rc::new(std::cell::Cell::new(Bounds::default())),
             viewer: None,
             viewer_serial: 0,
@@ -305,6 +309,14 @@ impl Immagine {
 
 impl Render for Immagine {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_pass.set(self.render_pass.get() + 1);
+        let pass = self.render_pass.get();
+        {
+            let mut tiles = self.tile_bounds.borrow_mut();
+            if tiles.len() > 600 {
+                tiles.retain(|_, (_, seen)| *seen + 2 >= pass);
+            }
+        }
         let p = Palette::new(self.dark);
         let background = if self.dark { rgb(0x000000) } else { rgb(0xffffff) };
         let content = match self.screen {
