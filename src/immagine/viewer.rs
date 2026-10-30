@@ -92,6 +92,8 @@ pub(super) struct Viewer {
     snap: Option<Snap>,
     /// A drag just ended: the next render cancels the scroll coast GPUI starts from the same finger.
     stop_momentum: Cell<bool>,
+    /// Set by the close animation when it has produced its final frame.
+    close_done: Rc<Cell<bool>>,
     zoom: f32,
     pan: (f32, f32),
     /// Two fingers are down: single-pointer drags are ignored.
@@ -175,6 +177,7 @@ impl Immagine {
             snap_id: 0,
             snap: None,
             stop_momentum: Cell::new(false),
+            close_done: Rc::new(Cell::new(false)),
             zoom: 1.,
             pan: (0., 0.),
             pinching: false,
@@ -207,15 +210,32 @@ impl Immagine {
         self.viewer_serial += 1;
         v.serial = self.viewer_serial;
         cx.notify();
+        // The viewer is removed once the render pass has drawn the last frame of the shrink (`close_done`), not on a
+        // wall-clock timer that can fire while slow frames have not yet reached the end. The timeout is a safety net.
+        let serial = v.serial;
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(CLOSE_MS + 60)).await;
-            this.update(cx, |t, cx| {
-                if t.viewer.as_ref().is_some_and(|v| v.closing) {
-                    t.viewer = None;
-                    cx.notify();
+            let mut waited = 0;
+            loop {
+                cx.background_executor().timer(Duration::from_millis(16)).await;
+                waited += 16;
+                let finished = this
+                    .update(cx, |t, cx| match t.viewer.as_ref() {
+                        Some(v) if v.closing && v.serial == serial => {
+                            if v.close_done.get() || waited > CLOSE_MS * 4 {
+                                t.viewer = None;
+                                cx.notify();
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        _ => true,
+                    })
+                    .unwrap_or(true);
+                if finished {
+                    break;
                 }
-            })
-            .ok();
+            }
         })
         .detach();
     }
@@ -521,6 +541,7 @@ impl Immagine {
             window.request_animation_frame();
         }
         let snapping = snap.is_some();
+        let close_done = v.close_done.clone();
         // Closing shrinks into the tile of the photo that is shown now (not the one the viewer was opened on); when
         // that tile is not on screen the photo just fades out.
         let tile = if closing { self.tile_bounds.borrow().get(&index).copied().filter(|b| f32::from(b.origin.y) < vh && f32::from(b.origin.y + b.size.height) > 0.) } else { v.from };
@@ -637,6 +658,9 @@ impl Immagine {
                         .left_0()
                         .size_full()
                         .with_animation(("viewer-anim", v.serial), anim(if closing { CLOSE_MS } else { OPEN_MS }), move |el, d| {
+                            if closing && d >= 1. {
+                                close_done.set(true);
+                            }
                             let t = if closing { 1. - d } else { d };
                             // While dragging down the backdrop fades and the photo follows the finger.
                             let fade = match release {
