@@ -100,7 +100,11 @@ pub(crate) struct Immagine {
     /// Columns shown right now (fractional while pinching or settling), see `timeline.rs`.
     grid_f: f32,
     grid_from: usize,
-    grid_anchor: usize,
+    /// The photo held still while zooming, and where in its row (0..1) the middle of the screen was when the
+    /// pinch began.
+    grid_anchor: (usize, f32),
+    /// (row height, empty rows above the photos, middle of the screen in the list's box) of the last timeline layout.
+    grid_geom: std::cell::Cell<(f32, usize, f32)>,
     grid_pinching: bool,
     /// The user zoomed the grid: the width-based default no longer applies.
     grid_user: bool,
@@ -221,7 +225,8 @@ impl Immagine {
             grid_cols: 0,
             grid_f: 3.,
             grid_from: 3,
-            grid_anchor: 0,
+            grid_anchor: (0, 0.5),
+            grid_geom: std::cell::Cell::new((0., 0, 0.)),
             grid_pinching: false,
             grid_user: false,
             grid_anim: None,
@@ -505,6 +510,11 @@ impl Render for Immagine {
             .child(content)
             .child(self.grid_input(cx))
             .child(rubber_band::input(cx.weak_entity(), |this, dy, phase, window| {
+                // While the grid zooms, the first finger of the pinch must not also scroll the list or start a fling.
+                if this.grid_zooming() {
+                    window.cancel_touch_momentum();
+                    return (true, false);
+                }
                 let scroll = this.active_scroll();
                 this.rubber.event(dy, phase, scroll.as_ref(), window)
             }))

@@ -31,6 +31,11 @@ impl Immagine {
         self.screen == Screen::Timeline && self.tab == 0 && self.range_mode == 2 && !self.search.open && self.viewer.is_none()
     }
 
+    /// Pinching, settling or fading in after a level switch: the grid holds `grid_anchor` in place.
+    pub(super) fn grid_zooming(&self) -> bool {
+        self.grid_pinching || self.grid_anim.is_some() || self.grid_fade_at > 0.
+    }
+
     /// Two-finger pinch on the timeline grid (touch via `Host::install_gestures`): the cells follow the fingers
     /// continuously; on release the grid settles on a column level (see `grid_release`).
     pub(super) fn grid_pinch(&mut self, event: Pinch, cx: &mut Context<Self>) {
@@ -68,8 +73,16 @@ impl Immagine {
         self.grid_fade = 1.;
         self.grid_fade_at = 0.;
         self.grid_from = ZOOM_LEVELS.iter().copied().min_by(|a, b| (*a as f32 - self.grid_f).abs().total_cmp(&(*b as f32 - self.grid_f).abs())).unwrap_or(3);
-        let (first, last) = self.visible.get();
-        self.grid_anchor = (first + last) / 2;
+        // The photo under the middle of the screen, measured in the layout on screen now, so nothing moves when the
+        // pinch begins.
+        let (row_h, top_rows, mid) = self.grid_geom.get();
+        let (cols, n) = (self.grid_cols.max(1), self.items.len());
+        if row_h > 0. && n > 0 {
+            let offset: f32 = self.timeline_scroll.0.borrow().base_handle.offset().y.into();
+            let pos = ((mid - offset) / row_h - top_rows as f32).max(0.);
+            let row = (pos as usize).min((n - 1) / cols);
+            self.grid_anchor = ((row * cols + cols / 2).min(n - 1), (pos - row as f32).clamp(0., 1.));
+        }
     }
 
     /// Spreading (ratio > 1) makes the cells larger: fewer columns.
@@ -78,7 +91,6 @@ impl Immagine {
         let lo = ZOOM_LEVELS[0] as f32 * 0.85;
         let hi = *ZOOM_LEVELS.last().unwrap() as f32 * 1.15;
         self.grid_f = (self.grid_f / ratio.powf(1.2)).clamp(lo, hi);
-        self.timeline_jump.set(Some(self.grid_anchor));
         cx.notify();
     }
 
@@ -130,7 +142,6 @@ impl Immagine {
             self.grid_f = from + (to as f32 - from) * e;
             let switching = to != self.grid_cols;
             self.grid_fade = if switching { 1. - ((t - 0.7) / 0.3).clamp(0., 1.) } else { 1. };
-            self.timeline_jump.set(Some(self.grid_anchor));
             if t >= 1. {
                 self.grid_anim = None;
                 self.grid_cols = to;
@@ -225,7 +236,11 @@ impl Immagine {
         let columns = if timeline { self.grid_cols.max(1) } else { cols_f as usize };
         let gap = if cols_f >= MONTH_LABEL_COLS as f32 - 0.5 { 1. } else { GAP };
         let cell = (vw - gap * (cols_f - 1.)) / cols_f;
-        let cell = if cols_f.fract() == 0. { cell.floor() } else { cell };
+        // Whole device pixels: layout rounds the list's row height to them, and with thousands of rows a fraction
+        // adds up to many rows between where the zoom puts the anchor and where the list draws it (the grid jumped
+        // back and forth while pinching near the end of a long timeline).
+        let scale = window.scale_factor();
+        let cell = if cols_f.fract() == 0. { cell.floor() } else { (cell * scale).floor() / scale };
         let fade = if timeline { self.grid_fade } else { 1. };
         let visible = self.visible.clone();
         let rows = items.len().div_ceil(columns);
@@ -356,18 +371,20 @@ impl Immagine {
             }
         }
         if placed.is_some() {
-            if let Some(j) = self.timeline_jump.take() {
-                if self.grid_pinching || self.grid_anim.is_some() {
-                    // Zooming: keep the anchor photo's row at the middle with a pixel-exact offset.
-                    let vh: f32 = window.viewport_size().height.into();
-                    let h = if lead > 0. { vh - shift_top - shift_bottom } else { vh };
-                    let total = (top_rows + rows + bottom_rows) as f32 * row_h;
-                    let at = (top_rows + j / columns) as f32 * row_h + cell / 2.;
-                    let y = (at - h / 2.).clamp(0., (total - h).max(0.));
-                    list_scroll_set.set_offset(point(px(0.), px(-y)));
-                } else {
-                    handle.scroll_to_item(top_rows + j / columns, ScrollStrategy::Center);
-                }
+            let vh: f32 = window.viewport_size().height.into();
+            let mid = vh / 2. - shift_top;
+            self.grid_geom.set((row_h, top_rows, mid));
+            if self.grid_zooming() {
+                // Zooming: the anchor photo stays where it was under the middle of the screen, pixel-exact, also
+                // across the switch to the target level.
+                let (j, frac) = self.grid_anchor;
+                let h = vh - shift_top - shift_bottom;
+                let total = (top_rows + rows + bottom_rows) as f32 * row_h;
+                let y = (((top_rows + j / columns) as f32 + frac) * row_h - mid).clamp(0., (total - h).max(0.));
+                list_scroll_set.set_offset(point(px(0.), px(-y)));
+                self.timeline_jump.take();
+            } else if let Some(j) = self.timeline_jump.take() {
+                handle.scroll_to_item(top_rows + j / columns, ScrollStrategy::Center);
             }
         }
         let list = list.track_scroll(handle);
