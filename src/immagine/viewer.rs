@@ -4,7 +4,7 @@
 //! stand-in until the larger preview arrives, and the full-size rendition once zoomed in.
 
 use super::{thumbs, Immagine};
-use crate::components::glass::glass_div;
+use crate::components::glass::glass_div_faded;
 use crate::logic::client::ImmichClient;
 use crate::logic::models::album_op::AlbumOp;
 use crate::logic::models::asset::Asset;
@@ -89,6 +89,9 @@ pub(super) struct Viewer {
     vel_y: f32,
     release: Option<Release>,
     snap: Option<Snap>,
+    /// Controls' visibility when closing began, and when it did: they fade out over the first part of the morph.
+    chrome0: f32,
+    close_at: f64,
     /// A drag just ended: the next render cancels the scroll coast GPUI starts from the same finger.
     stop_momentum: Cell<bool>,
     zoom: f32,
@@ -105,6 +108,12 @@ pub(super) struct Viewer {
 /// Photo scale while dragging down by `dy`: 1 at rest, 0.5 at half a screen height.
 fn dismiss_scale(dy: f32, vh: f32) -> f32 {
     1. - 0.5 * (dy.max(0.) / (vh * 0.5).max(1.)).clamp(0., 1.)
+}
+
+/// How visible the viewer's controls are (1 = full) while the photo is dragged down at scale `ds`: gone shortly
+/// after the point where letting go closes the viewer, and back again as the photo springs back.
+fn chrome_alpha(ds: f32) -> f32 {
+    (1. - (1. - ds) / 0.2).clamp(0., 1.)
 }
 
 /// The largest box of aspect ratio `ar` (w/h) centered in `(x, y, w, h)`.
@@ -172,6 +181,8 @@ impl Immagine {
             vel_y: 0.,
             release: None,
             snap: None,
+            chrome0: 1.,
+            close_at: 0.,
             stop_momentum: Cell::new(false),
             zoom: 1.,
             pan: (0., 0.),
@@ -198,6 +209,7 @@ impl Immagine {
             return;
         }
         v.closing = true;
+        v.close_at = now_ms();
         v.start = None;
         v.video = None;
         v.zoom = 1.;
@@ -283,6 +295,7 @@ impl Immagine {
                 if ds < CLOSE_SCALE || (dy > 40. && v.vel_y > FLICK_SPEED) {
                     let (vw, vh) = v.viewport.get();
                     let (ax, ay) = v.anchor;
+                    v.chrome0 = chrome_alpha(ds);
                     v.release = Some(Release {
                         rect: (ax - ax * ds + dx, ay - ay * ds + dy, vw * ds, vh * ds),
                         fade: (1. - dy / (vh * 0.5)).clamp(0.3, 1.),
@@ -517,6 +530,14 @@ impl Immagine {
             window.request_animation_frame();
         }
         let snapping = snap.is_some();
+        let mut k = chrome_alpha(ds);
+        if closing {
+            let t = ((now - v.close_at) / (CLOSE_MS as f64 * 0.5)).clamp(0., 1.) as f32;
+            k = v.chrome0 * (1. - t);
+            if k > 0. {
+                window.request_animation_frame();
+            }
+        }
         // Closing shrinks into the tile of the photo that is shown now (not the one the viewer was opened on); when
         // that tile is not on screen the photo just fades out.
         let tile = if closing { self.tile_bounds.borrow().get(&index).copied().filter(|b| f32::from(b.origin.y) < vh && f32::from(b.origin.y + b.size.height) > 0.) } else { v.from };
@@ -566,7 +587,8 @@ impl Immagine {
         let bottom = self.bottom.max(10.);
 
         let chip = |id: &'static str, label: String, color: Rgba| {
-            glass_div(GLASS_TINT_DARK, 18.)
+            let color = Rgba { a: color.a * k, ..color };
+            glass_div_faded(GLASS_TINT_DARK, 18., k)
                 .id(id)
                 .h(px(36.))
                 .px_4()
@@ -577,12 +599,12 @@ impl Immagine {
                 .child(label)
         };
 
-        let info_panel = (v.info && !closing).then(|| {
+        let info_panel = (v.info && k > 0.).then(|| {
             let lines = match &v.details {
                 Some(asset) => Self::info_lines(asset),
                 None => vec![("", "Lädt …".to_string())],
             };
-            glass_div(GLASS_TINT_DARK, 24.)
+            glass_div_faded(GLASS_TINT_DARK, 24., k)
                 .absolute()
                 .left(px(16.))
                 .right(px(16.))
@@ -592,6 +614,7 @@ impl Immagine {
                 .flex_col()
                 .gap_2()
                 .text_color(rgb(0xffffff))
+                .opacity(k)
                 .children(lines.into_iter().map(|(label, value)| {
                     div()
                         .flex()
@@ -694,7 +717,7 @@ impl Immagine {
                                     .w_full()
                                     .flex()
                                     .justify_center()
-                                    .opacity(t * fade)
+                                    .opacity(t * fade * k)
                                     .text_color(rgb(0xffffff))
                                     .text_size(px(15.))
                                     .child(format!("{date}  ·  {} von {count}", index + 1)),
@@ -702,7 +725,21 @@ impl Immagine {
                         }),
                 )
                 .children(info_panel)
-                .children((!closing).then(|| {
+                .children((k > 0.).then(|| {
+                    let live = !closing;
+                    let mut fav = glass_div_faded(GLASS_TINT_DARK, 18., k)
+                        .id("viewer-fav")
+                        .h(px(36.))
+                        .w(px(48.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(heart(favorite, k));
+                    let mut info = chip("viewer-info", "Info".into(), if v.info { rgb(BLUE).into() } else { rgb(0xffffff).into() });
+                    if live {
+                        fav = fav.on_click(cx.listener(|this, _, _, cx| this.toggle_favorite(cx)));
+                        info = info.on_click(cx.listener(|this, _, _, cx| this.toggle_info(cx)));
+                    }
                     div()
                         .absolute()
                         .bottom(px(bottom + 40.))
@@ -710,31 +747,16 @@ impl Immagine {
                         .flex()
                         .justify_center()
                         .gap_3()
-                        .child(
-                            glass_div(GLASS_TINT_DARK, 18.)
-                                .id("viewer-fav")
-                                .h(px(36.))
-                                .w(px(48.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(heart(favorite))
-                                .on_click(cx.listener(|this, _, _, cx| this.toggle_favorite(cx))),
-                        )
-                        .child(
-                            chip("viewer-info", "Info".into(), if v.info { rgb(BLUE).into() } else { rgb(0xffffff).into() })
-                                .on_click(cx.listener(|this, _, _, cx| this.toggle_info(cx))),
-                        )
-                        .children(
-                            (is_video && !playing).then(|| chip("viewer-play", "Abspielen".into(), rgb(0xffffff).into()).on_click(cx.listener(|this, _, _, cx| this.play_video(cx)))),
-                        )
+                        .child(fav)
+                        .child(info)
+                        .children((is_video && !playing).then(|| {
+                            let play = chip("viewer-play", "Abspielen".into(), rgb(0xffffff).into());
+                            if live { play.on_click(cx.listener(|this, _, _, cx| this.play_video(cx))) } else { play }
+                        }))
                 }))
-                .children((!closing).then(|| {
-                    super::icons::back_chip(GLASS_TINT_DARK, "viewer-done", rgb(0xffffff).into())
-                        .absolute()
-                        .top(px(top + 8.))
-                        .left(px(16.))
-                        .on_click(cx.listener(|this, _, _, cx| this.close_viewer(cx)))
+                .children((k > 0.).then(|| {
+                    let back = super::icons::back_chip_faded(GLASS_TINT_DARK, "viewer-done", rgb(0xffffff).into(), k).absolute().top(px(top + 8.)).left(px(16.));
+                    if closing { back } else { back.on_click(cx.listener(|this, _, _, cx| this.close_viewer(cx))) }
                 }))
                 .into_any_element(),
         )
@@ -742,7 +764,7 @@ impl Immagine {
 }
 
 /// A heart, filled red when `filled`, otherwise a white outline (the font has no heart glyph).
-fn heart(filled: bool) -> Canvas<()> {
+fn heart(filled: bool, k: f32) -> Canvas<()> {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
@@ -759,7 +781,8 @@ fn heart(filled: bool) -> Canvas<()> {
             b.curve_to(at(12., 21.5), at(22., 14.5));
             b.close();
             if let Ok(path) = b.build() {
-                window.paint_path(path, if filled { rgb(RED) } else { rgb(0xffffff) });
+                let color: Rgba = if filled { rgb(RED).into() } else { rgb(0xffffff).into() };
+                window.paint_path(path, Rgba { a: k, ..color });
             }
         },
     )

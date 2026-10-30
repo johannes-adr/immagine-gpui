@@ -67,6 +67,7 @@ pub(crate) struct Immagine {
     tab_from: f32,
     bubble_from: f32,
     thumb_gen: u32,
+    thumb_at: f64,
     /// Screen bounds of the tiles painted last, so the viewer can zoom out of the tapped one.
     tile_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     grid_bounds: Rc<std::cell::Cell<Bounds<Pixels>>>,
@@ -129,6 +130,7 @@ impl Immagine {
             tab_from: 0.,
             bubble_from: 0.,
             thumb_gen: 0,
+            thumb_at: 0.,
             tile_bounds: Rc::new(RefCell::new(HashMap::new())),
             grid_bounds: Rc::new(std::cell::Cell::new(Bounds::default())),
             viewer: None,

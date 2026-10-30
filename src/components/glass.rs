@@ -3,14 +3,19 @@ use gpui_kit::*;
 /// Liquid glass: a div whose backdrop is blurred and refracted by the renderer's glass pass.
 /// Children are painted after the glass, so they stay crisp on top of it.
 pub(crate) fn glass_div(tint: Hsla, radius: f32) -> Div {
+    glass_div_faded(tint, radius, 1.)
+}
+
+/// Glass has no opacity, so `k` (1 = full, 0 = gone) scales every effect of the pass down to an invisible one.
+pub(crate) fn glass_div_faded(tint: Hsla, radius: f32, k: f32) -> Div {
     let style = GlassStyle {
         corner_radius: px(radius),
-        blur: px(12.),
+        blur: px(12. * k),
         bezel: px((radius * 0.7).clamp(10., 22.)),
-        refraction: px((radius * 0.5).clamp(6., 14.)),
-        dispersion: 0.06,
-        light: 1.0,
-        tint,
+        refraction: px((radius * 0.5).clamp(6., 14.) * k),
+        dispersion: 0.06 * k,
+        light: k,
+        tint: Hsla { a: tint.a * k, ..tint },
     };
     div().relative().rounded(px(radius)).child(
         canvas(|_, _, _| (), move |bounds, _, window, _| window.paint_glass(bounds, style))

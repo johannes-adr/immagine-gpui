@@ -1,6 +1,6 @@
 //! Small vector icons drawn as paths (the bundled font has no chevron or heart glyphs).
 
-use crate::components::glass::glass_div;
+use crate::components::glass::glass_div_faded;
 use gpui_kit::*;
 
 /// A "<" chevron, `color` stroked.
@@ -25,5 +25,11 @@ pub(super) fn chevron(color: Rgba) -> Canvas<()> {
 
 /// A round glass back button with a chevron.
 pub(super) fn back_chip(tint: Hsla, id: &'static str, color: Rgba) -> Stateful<Div> {
-    glass_div(tint, 18.).id(id).h(px(36.)).w(px(48.)).flex().items_center().justify_center().active(|s| s.opacity(0.6)).child(chevron(color))
+    back_chip_faded(tint, id, color, 1.)
+}
+
+/// `back_chip` shown at `k` (1 = full, 0 = invisible).
+pub(super) fn back_chip_faded(tint: Hsla, id: &'static str, color: Rgba, k: f32) -> Stateful<Div> {
+    let color = Rgba { a: color.a * k, ..color };
+    glass_div_faded(tint, 18., k).id(id).h(px(36.)).w(px(48.)).flex().items_center().justify_center().active(|s| s.opacity(0.6)).child(chevron(color))
 }

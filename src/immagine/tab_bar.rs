@@ -1,7 +1,7 @@
 use super::Immagine;
 use crate::components::glass::glass_div;
 use crate::theme::{Palette, BLUE};
-use crate::util::{anim, lerp, spring_out};
+use crate::util::{anim, lerp, now_ms, spring_out};
 use gpui_kit::*;
 use std::time::Duration;
 
@@ -11,6 +11,8 @@ pub(super) const TABS: [&str; 3] = ["Mediathek", "Alben", "Personen"];
 const SIDE: f32 = 24.;
 /// Finger travel below which a press still counts as a tap on the slot under it.
 const TAP_SLOP: f32 = 6.;
+/// Length of the thumb animation.
+const THUMB_MS: f64 = 520.;
 
 #[derive(Clone, Copy)]
 pub(super) struct TabDrag {
@@ -33,16 +35,22 @@ impl Immagine {
             self.bubble_from = 0.;
             self.tab = tab;
             self.tab_gen += 1;
-            self.thumb_gen += 1;
+            self.bump_thumb();
             cx.notify();
         }
+    }
+
+    /// Restarts the thumb animation (bubble and slide) from now on.
+    fn bump_thumb(&mut self) {
+        self.thumb_gen += 1;
+        self.thumb_at = now_ms();
     }
 
     fn tab_drag_begin(&mut self, x: f32, viewport_w: f32, cx: &mut Context<Self>) {
         let slot = slot_width(viewport_w);
         let pos = self.tab as f32;
         self.tab_drag = Some(TabDrag { pos, grab: x - (SIDE + (pos + 0.5) * slot), start_x: x, moved: false });
-        self.thumb_gen += 1;
+        self.bump_thumb();
         cx.notify();
     }
 
@@ -71,7 +79,7 @@ impl Immagine {
             self.tab = target;
             self.tab_gen += 1;
         }
-        self.thumb_gen += 1;
+        self.bump_thumb();
         cx.notify();
     }
 
@@ -82,6 +90,9 @@ impl Immagine {
         // drag keeps the same animation running with the new captured position.
         let (pos0, pos1, b0, b1) = match self.tab_drag {
             Some(d) => (d.pos, d.pos, 0., 1.),
+            // The bar is torn down while a photo is open; once the last animation is over a rebuilt bar must
+            // start at rest, not replay the slide.
+            None if now_ms() - self.thumb_at > THUMB_MS => (self.tab as f32, self.tab as f32, 0., 0.),
             None => (self.tab_from, self.tab as f32, self.bubble_from, 0.),
         };
         let thumb = glass_div(p.bar_tint, 28.)
@@ -90,7 +101,7 @@ impl Immagine {
             .bg(p.tab_thumb)
             .with_animation(
                 ("thumb-anim", self.thumb_gen),
-                Animation::new(Duration::from_millis(520)).with_easing(spring_out),
+                Animation::new(Duration::from_millis(THUMB_MS as u64)).with_easing(spring_out),
                 move |el, d| {
                     let pos = lerp(pos0, pos1, d);
                     let b = lerp(b0, b1, d).max(0.);
