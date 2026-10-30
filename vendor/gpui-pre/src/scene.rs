@@ -788,6 +788,8 @@ pub struct GlassParams {
     pub fade: f32,
     pub light: f32,
     pub tint: [f32; 4],
+    /// Look of the glass: 0 = original, 1 = closer to Apple's Liquid Glass. See `set_glass_variant`.
+    pub variant: f32,
 }
 
 impl From<PaintSurface> for Primitive {

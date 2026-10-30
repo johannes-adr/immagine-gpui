@@ -959,7 +959,7 @@ impl MetalRenderer {
         for surface in surfaces {
             let g = &surface.glass;
             // Mirrors `Params` in glass.metal (and glass.wgsl): four float4s, all in device pixels.
-            let params: [f32; 16] = [
+            let params: [f32; 20] = [
                 surface.bounds.origin.x.0,
                 surface.bounds.origin.y.0,
                 surface.bounds.size.width.0,
@@ -976,6 +976,10 @@ impl MetalRenderer {
                 g.tint[1],
                 g.tint[2],
                 g.tint[3],
+                g.variant,
+                0.,
+                0.,
+                0.,
             ];
             let bytes = mem::size_of_val(&params) as u64;
             command_encoder.set_vertex_bytes(0, bytes, params.as_ptr() as *const _);

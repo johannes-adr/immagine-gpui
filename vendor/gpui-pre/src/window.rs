@@ -5176,6 +5176,7 @@ impl Window {
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn paint_glass(&mut self, bounds: Bounds<Pixels>, style: GlassStyle) {
+        let variant = GLASS_VARIANT.load(std::sync::atomic::Ordering::Relaxed) as f32;
         self.invalidator.debug_assert_paint();
 
         let scale = self.scale_factor();
@@ -5196,6 +5197,7 @@ impl Window {
                 fade: f32::from(style.fade) * scale,
                 light: style.light,
                 tint: [tint.r, tint.g, tint.b, tint.a],
+                variant,
             },
         });
     }
@@ -10032,6 +10034,14 @@ mod inspector_tests {
         })
         .expect("closed inspector has no bookkeeping and no style overrides");
     }
+}
+
+static GLASS_VARIANT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Selects the glass look for every glass surface painted afterwards: 0 = original, 1 = Apple-like
+/// (strong edge lensing, clearer middle, specular rim, drop shadow).
+pub fn set_glass_variant(variant: u32) {
+    GLASS_VARIANT.store(variant, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// How a glass surface bends, blurs and lights what is behind it. Lengths are in logical pixels.

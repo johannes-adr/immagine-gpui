@@ -3,6 +3,10 @@ use gpui_kit::*;
 
 /// Opens the app in a phone-sized window on the standard GPUI platform (Metal, Vulkan, ...).
 pub fn run() {
+    // `IMMAGINE_GLASS=1` selects the Apple-like glass look (see `set_glass_variant`).
+    if let Some(variant) = std::env::var("IMMAGINE_GLASS").ok().and_then(|v| v.parse().ok()) {
+        gpui_kit::set_glass_variant(variant);
+    }
     gpui_kit::platform::application().run(|cx| {
         gpui_kit::init(cx);
         if matches!(cx.window_appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark) {

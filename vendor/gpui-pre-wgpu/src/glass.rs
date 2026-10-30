@@ -14,6 +14,7 @@ struct GlassUniforms {
     misc: [f32; 4],
     shape: [f32; 4],
     tint: [f32; 4],
+    extra: [f32; 4],
 }
 
 pub(crate) struct GlassResources {
@@ -263,6 +264,7 @@ impl GlassResources {
             ],
             shape: [g.bezel, g.refraction, g.fade, g.light],
             tint: g.tint,
+            extra: [g.variant, 0., 0., 0.],
         };
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("glass_uniforms"),

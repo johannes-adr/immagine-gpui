@@ -6,6 +6,7 @@ struct Params {
     misc: vec4<f32>,   // viewport w, viewport h, corner radius, blur radius
     shape: vec4<f32>,  // bezel width, max refraction, bottom fade height, light strength
     tint: vec4<f32>,
+    extra: vec4<f32>,  // x: look variant (0 = original, 1 = Apple-like)
 };
 
 @group(0) @binding(0) var<uniform> P: Params;
@@ -18,11 +19,14 @@ struct VOut {
 };
 
 const MARGIN: f32 = 2.0;
+// The Apple-like look draws a soft drop shadow outside the shape, so its quad is larger.
+const MARGIN_V2: f32 = 20.0;
 
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> VOut {
     let uv = vec2<f32>(f32(i & 1u), f32(i >> 1u));
-    let p = P.rect.xy - MARGIN + uv * (P.rect.zw + 2.0 * MARGIN);
+    let m = select(MARGIN, MARGIN_V2, P.extra.x > 0.5);
+    let p = P.rect.xy - m + uv * (P.rect.zw + 2.0 * m);
     var o: VOut;
     o.pos = vec4<f32>(p.x / P.misc.x * 2.0 - 1.0, 1.0 - p.y / P.misc.y * 2.0, 0.0, 1.0);
     o.px = p;
@@ -67,8 +71,93 @@ fn blurred(center: vec2<f32>, radius: f32) -> vec3<f32> {
     return acc / wsum;
 }
 
+// Variant 1: closer to Apple's Liquid Glass. Refraction lives in a thin band at the edge (steep profile,
+// a little dispersion), the middle is only lightly blurred so content stays readable, the tint adapts to
+// the brightness behind it, the rim is a thin bright line lit from the top left and (fainter) the bottom
+// right, and a soft shadow grounds the shape.
+fn glass_v2(in: VOut) -> vec4<f32> {
+    let c = P.rect.xy + P.rect.zw * 0.5;
+    let p = in.px - c;
+    let d = shape_sd(p);
+    var fade = 1.0;
+    if (P.shape.z > 0.0) {
+        let from_bottom = P.rect.y + P.rect.w - in.px.y;
+        let k = clamp(from_bottom / P.shape.z, 0.0, 1.0);
+        fade = k * k * (3.0 - 2.0 * k);
+    }
+    let coverage = (1.0 - smoothstep(-0.75, 0.75, d)) * fade;
+
+    // Drop shadow, only for shapes with a rim light (not for the full-width blur bars).
+    var shadow = 0.0;
+    if (P.shape.w > 0.0 && P.shape.z <= 0.0) {
+        let sd = shape_sd(p - vec2<f32>(0.0, 4.0));
+        shadow = 0.26 * P.shape.w * (1.0 - smoothstep(-3.0, 16.0, sd));
+    }
+    let behind = shadow * (1.0 - coverage);
+    if (coverage <= 0.0) {
+        if (behind <= 0.002) {
+            discard;
+        }
+        return vec4<f32>(0.0, 0.0, 0.0, behind);
+    }
+
+    let bezel = max(P.shape.x, 1.0);
+    let depth = max(-d, 0.0);
+    let e = 1.0;
+    let g = vec2<f32>(
+        shape_sd(p + vec2<f32>(e, 0.0)) - shape_sd(p - vec2<f32>(e, 0.0)),
+        shape_sd(p + vec2<f32>(0.0, e)) - shape_sd(p - vec2<f32>(0.0, e)),
+    );
+    let n = g / max(length(g), 0.0001);
+
+    // Steep lens profile: nothing in the middle, strong bending in the outer part of the bezel.
+    let t = clamp(1.0 - depth / bezel, 0.0, 1.0);
+    let bend = t * t * t;
+    let shift = n * bend * P.shape.y * 1.7;
+
+    // Light blur in the middle, more smear toward the edge.
+    let radius = mix(P.misc.w * 0.42, P.misc.w * 0.9, t * t);
+    var col = blurred(in.px + shift, radius);
+
+    // Dispersion in the edge band only (three single taps, so the middle pays nothing).
+    if (bend > 0.04) {
+        let spread = 0.10 * bend;
+        let split = vec3<f32>(
+            tap(in.px + shift * (1.0 + spread)).r,
+            tap(in.px + shift).g,
+            tap(in.px + shift * (1.0 - spread)).b,
+        );
+        col = mix(col, split, clamp(bend * 0.6, 0.0, 0.6));
+    }
+
+    // Slight frosting and vibrancy.
+    let luma = dot(col, vec3<f32>(0.299, 0.587, 0.114));
+    col = mix(vec3<f32>(luma, luma, luma), col, 1.15);
+    col = mix(col, vec3<f32>(0.5, 0.5, 0.5), 0.06) + vec3<f32>(0.025, 0.025, 0.025);
+
+    // Adaptive tint: more of it over bright content, so the glass stays legible and never washes out.
+    let tint_a = clamp(P.tint.a * (0.6 + 0.9 * luma), 0.0, 1.0);
+    col = mix(col, P.tint.rgb, tint_a);
+
+    // Thin bright rim with two specular lobes (top left strong, bottom right nearly as strong),
+    // plus a soft inner glow just inside it.
+    let light_dir = normalize(vec2<f32>(-0.55, -0.83));
+    let facing = dot(n, light_dir);
+    let spec = pow(max(facing, 0.0), 2.0) + 0.85 * pow(max(-facing, 0.0), 2.0);
+    let rim_line = 1.0 - smoothstep(0.35, 1.5, depth);
+    let rim_glow = 1.0 - smoothstep(0.0, max(bezel * 0.55, 3.0), depth);
+    col = col + vec3<f32>(1.0, 1.0, 1.0) * (rim_line * (0.20 + 0.80 * spec) * 0.9 * P.shape.w);
+    col = col + vec3<f32>(1.0, 1.0, 1.0) * (rim_glow * (0.03 + 0.12 * spec) * P.shape.w);
+
+    col = clamp(col, vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0));
+    return vec4<f32>(col * coverage, coverage + behind);
+}
+
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
+    if (P.extra.x > 0.5) {
+        return glass_v2(in);
+    }
     let c = P.rect.xy + P.rect.zw * 0.5;
     let p = in.px - c;
     let d = shape_sd(p);
