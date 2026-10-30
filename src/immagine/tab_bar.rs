@@ -5,7 +5,7 @@ use crate::util::{lerp, now_ms, spring_out};
 use gpui_kit::*;
 use std::time::Duration;
 
-pub(super) const TABS: [&str; 3] = ["Mediathek", "Alben", "Personen"];
+pub(super) const TABS: [&str; 3] = ["Mediathek", "Sammlungen", "Personen"];
 
 /// Horizontal margin between the screen edge and the first tab slot (bar margin 20 + bar padding 4).
 const SIDE: f32 = 24.;
@@ -125,21 +125,57 @@ impl Immagine {
         };
 
         let color = |ix: usize| -> Rgba { fade(if shown == ix { rgb(BLUE).into() } else { p.tab_inactive }) };
+        // Apple's Mediathek / Sammlungen glyphs: filled shapes, with the details cut out in the screen color.
+        let hole: Rgba = if self.dark { rgb(0x000000).into() } else { rgb(0xffffff).into() };
         let photo_icon = |c: Rgba| {
+            let back = Rgba { a: c.a * 0.5, ..c };
             div()
-                .size(px(24.))
-                .rounded(px(6.))
-                .border_2()
-                .border_color(c)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(div().size(px(8.)).rounded_full().bg(c))
+                .size(px(26.))
+                .relative()
+                .child(div().absolute().top_0().left(px(4.)).size(px(22.)).rounded(px(5.)).bg(back))
+                .child(div().absolute().top(px(4.)).left_0().size(px(22.)).rounded(px(5.)).bg(c))
+                .child(
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, _| {
+                            let (x, y): (f32, f32) = (bounds.origin.x.into(), bounds.origin.y.into());
+                            let at = |px_: f32, py_: f32| point(px(x + px_), px(y + py_));
+                            let mut b = PathBuilder::fill();
+                            b.move_to(at(3.5, 23.));
+                            b.line_to(at(8.5, 16.));
+                            b.line_to(at(11.5, 19.5));
+                            b.line_to(at(15., 13.5));
+                            b.line_to(at(18.5, 23.));
+                            b.close();
+                            if let Ok(path) = b.build() {
+                                window.paint_path(path, hole);
+                            }
+                            let mut s = PathBuilder::fill();
+                            let (cx_, cy_, r) = (15.5, 10., 2.6);
+                            s.move_to(at(cx_ + r, cy_));
+                            for i in 1..=16 {
+                                let t = i as f32 / 16. * std::f32::consts::TAU;
+                                s.line_to(at(cx_ + r * t.cos(), cy_ + r * t.sin()));
+                            }
+                            s.close();
+                            if let Ok(path) = s.build() {
+                                window.paint_path(path, hole);
+                            }
+                        },
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+                )
         };
         let album_icon = |c: Rgba| {
-            div().size(px(26.)).relative().child(div().absolute().top_0().left(px(4.)).w(px(18.)).h(px(3.)).rounded_full().bg(c)).child(
-                div().absolute().top(px(6.)).left_0().size(px(24.)).rounded(px(6.)).border_2().border_color(c),
-            )
+            div()
+                .size(px(26.))
+                .relative()
+                .child(div().absolute().top_0().left(px(5.)).w(px(16.)).h(px(3.)).rounded(px(1.5)).bg(Rgba { a: c.a * 0.45, ..c }))
+                .child(div().absolute().top(px(4.5)).left(px(2.5)).w(px(21.)).h(px(3.5)).rounded(px(2.)).bg(Rgba { a: c.a * 0.7, ..c }))
+                .child(div().absolute().top(px(9.)).left_0().w(px(26.)).h(px(17.)).rounded(px(4.5)).bg(c))
         };
         let person_icon = |c: Rgba| {
             div()

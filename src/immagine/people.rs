@@ -342,7 +342,7 @@ impl Immagine {
             .child(div().pt_3().text_size(px(34.)).font_weight(FontWeight::BOLD).child(name))
             .child(div().text_size(px(15.)).text_color(color).child(subtitle));
 
-        let grid = self.photo_grid("person", page.items.clone(), p, window, cx);
+        let grid = self.photo_grid("person", page.items.clone(), 0., None, p, window, cx);
 
         div()
             .size_full()

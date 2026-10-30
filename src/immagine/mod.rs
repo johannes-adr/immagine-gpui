@@ -67,6 +67,9 @@ pub(crate) struct Immagine {
     tab_from: f32,
     bubble_from: f32,
     thumb_gen: u32,
+    /// The timeline shows the newest photos at the bottom and starts scrolled there.
+    timeline_scroll: UniformListScrollHandle,
+    timeline_placed: std::cell::Cell<bool>,
     thumb_at: f64,
     /// Screen bounds of the tiles painted last, so the viewer can zoom out of the tapped one.
     tile_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
@@ -77,6 +80,12 @@ pub(crate) struct Immagine {
     pinch: Option<crate::web_adapters::pinch::PinchHandle>,
     albums: albums::AlbumsState,
     people: people::PeopleState,
+}
+
+/// The timeline is stored newest first; the grid reads oldest first, so the newest photos sit at the bottom.
+fn oldest_first(mut items: Vec<TimelineItem>) -> Vec<TimelineItem> {
+    items.reverse();
+    items
 }
 
 impl Immagine {
@@ -130,6 +139,8 @@ impl Immagine {
             tab_from: 0.,
             bubble_from: 0.,
             thumb_gen: 0,
+            timeline_scroll: UniformListScrollHandle::new(),
+            timeline_placed: std::cell::Cell::new(false),
             thumb_at: 0.,
             tile_bounds: Rc::new(RefCell::new(HashMap::new())),
             grid_bounds: Rc::new(std::cell::Cell::new(Bounds::default())),
@@ -187,7 +198,7 @@ impl Immagine {
     fn install_engine(&mut self, store: MemoryStore, cx: &mut Context<Self>) {
         match SyncEngine::new(store, FetchTransport, WebClock, &self.origin) {
             Ok(engine) => {
-                self.items = Rc::new(engine.store().fetch_timeline());
+                self.items = Rc::new(oldest_first(engine.store().fetch_timeline()));
                 self.albums.refresh(engine.store());
                 self.engine = Some(engine);
                 self.screen = Screen::Timeline;
@@ -242,6 +253,7 @@ impl Immagine {
         self.token.clear();
         self.engine = None;
         self.items = Rc::new(Vec::new());
+        self.timeline_placed.set(false);
         self.albums = Default::default();
         self.people = Default::default();
         self.viewer = None;
@@ -289,7 +301,7 @@ impl Immagine {
                     Err(e) => t.status = e.to_string(),
                 }
                 if let Some(items) = items {
-                    t.items = Rc::new(items);
+                    t.items = Rc::new(oldest_first(items));
                 }
                 cx.notify();
             });

@@ -1,6 +1,7 @@
 //! Timeline: all photos newest first, a virtualized grid of server thumbnails.
 
 use super::{thumbs, Immagine};
+use crate::components::glass::glass_div;
 use crate::theme::Palette;
 use crate::logic::models::timeline::TimelineItem;
 use gpui_kit::*;
@@ -11,10 +12,13 @@ const GAP: f32 = 2.;
 impl Immagine {
     /// A virtualized, scrollable photo grid with a spacer for the tab bar at its end. Tapping a tile opens the
     /// viewer on `items`. Reused by the timeline, album pages and person pages; `id` must be unique per screen.
+    /// `lead` is empty space above the first row (for a translucent header laid over the list).
     pub(super) fn photo_grid(
         &self,
         id: &'static str,
         items: Rc<Vec<TimelineItem>>,
+        lead: f32,
+        scroll: Option<(&UniformListScrollHandle, &std::cell::Cell<bool>)>,
         p: &Palette,
         window: &Window,
         cx: &mut Context<Self>,
@@ -23,6 +27,7 @@ impl Immagine {
         let columns = ((vw / 120.).floor() as usize).clamp(3, 8);
         let cell = ((vw - GAP * (columns as f32 - 1.)) / columns as f32).floor();
         let rows = items.len().div_ceil(columns);
+        let items_empty = items.is_empty();
         let footer = self.bottom.max(10.) + 84.;
 
         let origin = self.origin.clone();
@@ -86,26 +91,41 @@ impl Immagine {
                 })
                 .collect()
         })
-        .size_full();
+        .size_full()
+        .pt(px(lead));
+        let list = match scroll {
+            Some((handle, placed)) => {
+                if !items_empty && !placed.replace(true) {
+                    handle.scroll_to_item(rows, ScrollStrategy::Bottom);
+                }
+                list.track_scroll(handle)
+            }
+            None => list,
+        };
         // The list's on-screen box, so the closing viewer can clip its shrinking photo to it.
         div().flex_1().relative().child(list).child(canvas(move |bounds, _, _| grid_bounds.set(bounds), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
     }
 
     pub(super) fn timeline_view(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let list = self.photo_grid("timeline", self.items.clone(), p, window, cx);
+        // The header is a glass strip laid over the grid, which scrolls underneath it (blurred).
+        let head = self.top.max(12.) + 112.;
+        let list = self.photo_grid("timeline", self.items.clone(), head, Some((&self.timeline_scroll, &self.timeline_placed)), p, window, cx);
 
         let count = self.items.len();
         let subtitle = if self.status.is_empty() { format!("{count} Fotos") } else { self.status.clone() };
 
         div()
             .size_full()
-            .flex()
-            .flex_col()
-            .pt(px(self.top.max(12.)))
+            .relative()
+            .child(div().absolute().top_0().left_0().size_full().flex().flex_col().child(list))
             .child(
-                div()
+                glass_div(p.bar_tint, 0.)
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .w_full()
+                    .h(px(head))
                     .px_4()
-                    .pt(px(40.))
                     .pb_2()
                     .flex()
                     .flex_row()
@@ -126,6 +146,5 @@ impl Immagine {
                             .on_click(cx.listener(|this, _, _, cx| this.log_out(cx))),
                     ),
             )
-            .child(list)
     }
 }

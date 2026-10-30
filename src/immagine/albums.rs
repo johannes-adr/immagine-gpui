@@ -173,7 +173,7 @@ impl Immagine {
             .child(back)
             .child(div().text_size(px(34.)).font_weight(FontWeight::BOLD).truncate().child(open.name.clone()))
             .child(div().text_size(px(15.)).text_color(p.secondary).child(subtitle));
-        let list = self.photo_grid("album-photos", open.items.clone(), p, window, cx);
+        let list = self.photo_grid("album-photos", open.items.clone(), 0., None, p, window, cx);
         div()
             .size_full()
             .flex()
