@@ -41,6 +41,7 @@ path = "src/bin/immagine-desktop.rs"
 # GPUI patched with a liquid-glass renderer pass (see vendor/).
 [patch.crates-io]
 gpui-pre = { path = "vendor/gpui-pre" }
+gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
 gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
 gpui-pre-web = { path = "vendor/gpui-pre-web" }
 

@@ -105,6 +105,19 @@ impl Immagine {
         })
         .detach();
 
+        // Follows the OS appearance while running (the web host passes it once at start-up).
+        let weak = cx.weak_entity();
+        window
+            .observe_window_appearance(move |window, cx| {
+                let dark = matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark);
+                weak.update(cx, |t, cx| {
+                    t.dark = dark;
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
