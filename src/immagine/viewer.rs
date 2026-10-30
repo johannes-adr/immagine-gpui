@@ -189,6 +189,11 @@ impl Viewer {
 }
 
 impl Immagine {
+    /// Id of the photo the viewer currently shows, so its grid tile can be drawn empty while the photo is on top.
+    pub(super) fn viewer_item_id(&self) -> Option<String> {
+        self.viewer.as_ref().and_then(|v| v.items.get(v.index)).map(|i| i.id.clone())
+    }
+
     /// Opens the viewer on `items[index]`, zooming out of the grid tile with that index if it was painted.
     pub(super) fn open_viewer(&mut self, items: Rc<Vec<TimelineItem>>, index: usize, cx: &mut Context<Self>) {
         let from = self.tile_bounds.borrow().get(&index).map(|t| t.now());

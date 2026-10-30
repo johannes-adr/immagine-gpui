@@ -39,7 +39,13 @@ pub(crate) fn glass_div_with(tint: Hsla, radius: f32, k: f32, fresh_backdrop: bo
         tint: Hsla { a: tint.a * k, ..tint },
         fresh_backdrop,
     };
-    div().relative().rounded(px(radius)).child(
+    let base = div().relative().rounded(px(radius));
+    // A fully faded glass still blits the frame's backdrop snapshot over its box, which wipes out whatever glass
+    // was painted there before (the tab bar's invisible thumb ate the left part of the range bar while they swap).
+    if k <= 0. {
+        return base;
+    }
+    base.child(
         canvas(|_, _, _| (), move |bounds, _, window, _| window.paint_glass(bounds, style))
             .absolute()
             .top_0()

@@ -4,6 +4,7 @@ use super::{thumbs, Immagine};
 use crate::components::glass::glass_blur;
 use crate::theme::Palette;
 use crate::logic::models::timeline::TimelineItem;
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::rc::Rc;
 
@@ -34,6 +35,8 @@ impl Immagine {
         let view = cx.weak_entity();
         let store = self.thumbs.clone();
         let bounds_map = self.tile_bounds.clone();
+        // The viewer's photo flies to/from its tile, so the tile looks empty meanwhile instead of showing it twice.
+        let hidden_id = self.viewer_item_id();
         let list_scroll = scroll.0.0.borrow().base_handle.clone();
         let grid_bounds = self.grid_bounds.clone();
         // A uniform list measures one row height for all items and does not account for its own padding when it
@@ -65,6 +68,7 @@ impl Immagine {
                         let all = items.clone();
                         let key = format!("t:{}", item.id);
                         let loaded = thumbs::get(&store, &key, || format!("{origin}/api/assets/{}/thumbnail?size=thumbnail", item.id), cx);
+                        let hidden = hidden_id.as_deref() == Some(item.id.as_str());
                         let picture = match (loaded, item.thumbhash.as_deref()) {
                             (Some(image), _) => Some(image),
                             (None, Some(hash)) => thumbs::placeholder(&store, &item.id, hash),
@@ -75,9 +79,9 @@ impl Immagine {
                             .relative()
                             .size(px(cell))
                             .flex_none()
-                            .bg(placeholder)
+                            .when(!hidden, |d| d.bg(placeholder))
                             .overflow_hidden()
-                            .children(picture.map(|image| img(image).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Cover)))
+                            .children(picture.filter(|_| !hidden).map(|image| img(image).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Cover)))
                             .child(
                                 canvas(
                                     move |bounds, _, _| {
@@ -111,6 +115,11 @@ impl Immagine {
                 handle.scroll_to_item(top_rows + rows + bottom_rows - 1, ScrollStrategy::Bottom);
             }
         }
+        if placed.is_some() {
+            if let Some(j) = self.timeline_jump.take() {
+                handle.scroll_to_item(top_rows + j / columns, ScrollStrategy::Center);
+            }
+        }
         let list = list.track_scroll(handle);
         // The list's on-screen box, so the closing viewer can clip its shrinking photo to it.
         // (An absolute box with only top and bottom set does not give its percentage-sized child a height, so the
@@ -127,7 +136,11 @@ impl Immagine {
     pub(super) fn timeline_view(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The header is a glass strip laid over the grid, which scrolls underneath it (blurred).
         let head = self.top.max(12.) + 78.;
+        let was_placed = self.timeline_placed.get();
         let list = self.photo_grid("timeline", self.items.clone(), head, (&self.timeline_scroll, Some(&self.timeline_placed)), p, window, cx);
+        if !was_placed && self.timeline_placed.get() {
+            self.scroll_settle.set(crate::util::now_ms());
+        }
 
         let count = self.items.len();
         let subtitle = if self.status.is_empty() { format!("{count} Fotos") } else { self.status.clone() };
@@ -136,6 +149,7 @@ impl Immagine {
             .size_full()
             .relative()
             .child(div().absolute().top_0().left_0().size_full().flex().flex_col().child(list))
+            .child(self.range_probe(cx))
             .child(
                 div()
                     .absolute()
