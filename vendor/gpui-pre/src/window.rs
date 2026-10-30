@@ -10036,9 +10036,9 @@ mod inspector_tests {
     }
 }
 
-static GLASS_VARIANT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static GLASS_VARIANT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 
-/// Selects the glass look for every glass surface painted afterwards: 0 = original, 1 = Apple-like
+/// Selects the glass look for every glass surface painted afterwards (default 1): 0 = original, 1 = Apple-like
 /// (strong edge lensing, clearer middle, specular rim, drop shadow).
 pub fn set_glass_variant(variant: u32) {
     GLASS_VARIANT.store(variant, std::sync::atomic::Ordering::Relaxed);

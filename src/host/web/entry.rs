@@ -8,7 +8,7 @@ thread_local! {
     static HANDLE: RefCell<Option<ApplicationHandle>> = const { RefCell::new(None) };
 }
 
-/// Glass look: 0 = original, 1 = Apple-like. `index.html` sets it from `?glass=1`; call before `run`.
+/// Glass look: 0 = original, 1 = Apple-like (default). `index.html` sets it from `?glass=0|1`; call before `run`.
 #[wasm_bindgen]
 pub fn set_glass_variant(variant: u32) {
     gpui_kit::set_glass_variant(variant);
