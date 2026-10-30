@@ -13,7 +13,7 @@ const GAP: f32 = 2.;
 /// bounce takes to its peak when a fling runs into an end.
 const MAX_OVERSCROLL: f32 = 150.;
 const BOUNCE_MS: f64 = 380.;
-const KICK_MS: f64 = 110.;
+const KICK_MS: f64 = 150.;
 
 #[derive(Clone, Copy, Default, PartialEq)]
 enum Mode {
@@ -195,7 +195,7 @@ impl Immagine {
         } else if outward && dy != 0. {
             // A fling ran into the end: one small bounce, scaled by its speed.
             window.cancel_touch_momentum();
-            o.mode = Mode::Kick { at: now, amp: (dy * 2.).clamp(-60., 60.) };
+            o.mode = Mode::Kick { at: now, amp: (dy * 6.).clamp(-90., 90.).signum() * (dy * 6.).abs().clamp(20., 90.) };
             true
         } else {
             false
