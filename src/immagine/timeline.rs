@@ -18,7 +18,7 @@ impl Immagine {
         p: &Palette,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> UniformList {
+    ) -> Div {
         let vw: f32 = window.viewport_size().width.into();
         let columns = ((vw / 120.).floor() as usize).clamp(3, 8);
         let cell = ((vw - GAP * (columns as f32 - 1.)) / columns as f32).floor();
@@ -31,7 +31,8 @@ impl Immagine {
         let view = cx.weak_entity();
         let store = self.thumbs.clone();
         let bounds_map = self.tile_bounds.clone();
-        uniform_list(id, rows + 1, move |range, window, cx| {
+        let grid_bounds = self.grid_bounds.clone();
+        let list = uniform_list(id, rows + 1, move |range, window, cx| {
             store.borrow_mut().begin_frame();
             for evicted in store.borrow_mut().take_evicted() {
                 let _ = window.drop_image(evicted);
@@ -87,7 +88,9 @@ impl Immagine {
                 .collect()
         })
         .track_scroll(&handle)
-        .flex_1()
+        .size_full();
+        // The list's on-screen box, so the closing viewer can clip its shrinking photo to it.
+        div().flex_1().relative().child(list).child(canvas(move |bounds, _, _| grid_bounds.set(bounds), |_, _, _, _| {}).absolute().size_full())
     }
 
     pub(super) fn timeline_view(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {

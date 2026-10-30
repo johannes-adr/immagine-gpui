@@ -69,6 +69,7 @@ pub(crate) struct Immagine {
     thumb_gen: u32,
     /// Screen bounds of the tiles painted last, so the viewer can zoom out of the tapped one.
     tile_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
+    grid_bounds: Rc<std::cell::Cell<Bounds<Pixels>>>,
     viewer: Option<viewer::Viewer>,
     viewer_serial: u32,
     /// Scroll position of each photo grid, kept here so a grid can stop rendering while the viewer covers it.
@@ -131,6 +132,7 @@ impl Immagine {
             bubble_from: 0.,
             thumb_gen: 0,
             tile_bounds: Rc::new(RefCell::new(HashMap::new())),
+            grid_bounds: Rc::new(std::cell::Cell::new(Bounds::default())),
             viewer: None,
             viewer_serial: 0,
             grid_scroll: Default::default(),
@@ -324,8 +326,8 @@ impl Render for Immagine {
             .bg(background)
             .text_color(p.label)
             .child(content)
-            .children(chrome)
             .children(viewer)
+            .children(chrome)
             // FPS debug badge, re-enable when profiling:
             // .child(fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, self.webgpu))
     }

@@ -503,6 +503,11 @@ impl Immagine {
             window.cancel_touch_momentum();
         }
         let (mut ds, anchor, release) = (v.ds, v.anchor, v.release);
+        let grid = {
+            let g = self.grid_bounds.get();
+            let (x, y, w, h): (f32, f32, f32, f32) = (g.origin.x.into(), g.origin.y.into(), g.size.width.into(), g.size.height.into());
+            (w > 1. && h > 1.).then_some((x, y, w, h))
+        };
         let (mut dx, mut dy) = (dx, dy);
         let now = now_ms();
         let snap = v.snap.filter(|s| now - s.start < SNAP_MS);
@@ -659,9 +664,20 @@ impl Immagine {
                                 }
                             };
                             let backdrop = t * fade;
-                            let mut el = el
-                                .child(div().absolute().size_full().bg(rgba(0x000000ff)).opacity(backdrop))
-                                .child(div().absolute().left(px(x0)).top(px(y0)).w(px(w)).h(px(h)).overflow_hidden().children(page(index, cover)));
+                            let photo = |ox: f32, oy: f32| div().absolute().left(px(x0 - ox)).top(px(y0 - oy)).w(px(w)).h(px(h)).overflow_hidden().children(page(index, cover));
+                            let mut el = el.child(div().absolute().size_full().bg(rgba(0x000000ff)).opacity(backdrop));
+                            el = match grid {
+                                // Shrinking into a tile that scrolls: the photo is clipped to the grid, so it never
+                                // floats over the header or the tab bar.
+                                // The clip grows from the whole screen to the grid as the photo shrinks, so closing starts
+                                // without a visible cut.
+                                Some((gx, gy, gw, gh)) if closing => {
+                                    let k = 1. - t;
+                                    let (cx_, cy_, cw, ch) = (lerp(0., gx, k), lerp(0., gy, k), lerp(vw, gw, k), lerp(vh, gh, k));
+                                    el.child(div().absolute().left(px(cx_)).top(px(cy_)).w(px(cw)).h(px(ch)).overflow_hidden().child(photo(cx_, cy_)))
+                                }
+                                _ => el.child(photo(0., 0.)),
+                            };
                             if settled && zoom == 1. && ds >= 0.999 && dy.abs() < 0.5 {
                                 // Neighbours slide in beside the current page.
                                 if index > 0 {
