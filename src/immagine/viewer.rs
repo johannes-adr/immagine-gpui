@@ -148,6 +148,12 @@ fn dismiss_scale(dy: f32, vh: f32) -> f32 {
     1. - 0.5 * (dy.max(0.) / (vh * 0.5).max(1.)).clamp(0., 1.)
 }
 
+/// A glass button of the viewer. It occludes, otherwise a click on it also reaches the photo layer underneath and
+/// toggles the controls (info pill, share, trash).
+pub(crate) fn glass_button(id: &'static str, w: f32, k: f32) -> Stateful<Div> {
+    glass_div_with(VIEWER_TINT, 24., k, true).id(id).occlude().h(px(48.)).w(px(w)).flex().items_center().justify_center()
+}
+
 /// How visible the viewer's controls are (1 = full) while the photo is dragged down at scale `ds`: gone shortly
 /// after the point where letting go closes the viewer, and back again as the photo springs back.
 fn chrome_alpha(ds: f32) -> f32 {
@@ -1116,7 +1122,7 @@ impl Immagine {
                 .child(label)
         };
         // Round or pill-shaped dark glass button of the top and bottom bars.
-        let button = |id: &'static str, w: f32| glass_div_with(VIEWER_TINT, 24., k, true).id(id).h(px(48.)).w(px(w)).flex().items_center().justify_center();
+        let button = |id: &'static str, w: f32| glass_button(id, w, k);
         let white: Rgba = Rgba { a: k, ..rgb(0xffffff).into() };
 
         // Filmstrip: neighbours around the shown photo, the shown one wider.
@@ -1163,6 +1169,8 @@ impl Immagine {
                 None => vec![("", "Lädt …".to_string())],
             };
             glass_div_with(VIEWER_TINT, 24., k, true)
+                .id("viewer-info-panel")
+                .occlude()
                 .absolute()
                 .left(px(16.))
                 .right(px(16.))
@@ -1495,4 +1503,45 @@ fn heart(filled: bool, k: f32) -> Canvas<()> {
         },
     )
     .size(px(22.))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ::gpui::TestAppContext;
+    use std::cell::Cell;
+
+    struct Probe {
+        photo: Rc<Cell<u32>>,
+        button: Rc<Cell<u32>>,
+    }
+
+    impl Render for Probe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let (photo, button) = (self.photo.clone(), self.button.clone());
+            div()
+                .size_full()
+                .child(div().id("photo").absolute().size_full().on_click(move |_, _, _| photo.set(photo.get() + 1)))
+                .child(
+                    glass_button("probe-button", 100., 1.)
+                        .absolute()
+                        .top(px(10.))
+                        .left(px(10.))
+                        .on_click(move |_, _, _| button.set(button.get() + 1)),
+                )
+        }
+    }
+
+    // `use super::*` pulls in gpui's `test` attribute macro; name the std one.
+    #[::core::prelude::v1::test]
+    fn button_click_does_not_reach_the_photo() {
+        let mut cx = TestAppContext::single();
+        let (photo, button) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+        let (p, b) = (photo.clone(), button.clone());
+        let (_, cx) = cx.add_window_view(|_, _| Probe { photo: p, button: b });
+        cx.simulate_click(point(px(50.), px(30.)), Modifiers::none());
+        assert_eq!((button.get(), photo.get()), (1, 0), "button action only");
+        cx.simulate_click(point(px(300.), px(300.)), Modifiers::none());
+        assert_eq!((button.get(), photo.get()), (1, 1), "photo tap still works");
+    }
 }

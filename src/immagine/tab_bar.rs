@@ -312,7 +312,13 @@ impl Immagine {
         let (left, slot, n) = bar.geometry(viewport_w);
         match bar {
             Bar::Tabs => {
+                let tapped = !self.tabs_slider.moved();
                 let Some(target) = self.tabs_slider.end(self.tab, x, left, slot, n) else { return };
+                if tapped && target == 0 && self.tab == 0 {
+                    // Tap on the selected Mediathek: back to the newest photos.
+                    self.timeline_placed.set(false);
+                    self.range_latch = None;
+                }
                 if target != self.tab {
                     self.tab = target;
                     self.tab_gen += 1;

@@ -157,6 +157,7 @@ Porting Robin's Immagine (`../immagine`, Swift/iOS, clone of github.com/RobinCod
 - `photo_grid` reports the scroll offset each frame (`track_scroll`, not while zooming). Above 3 pt/ms no new loads start (tiles show their thumbhash); a 150 ms wake-up re-renders so loads start once the fling slows or stops dead.
 - Prefetch: while nothing visible waits, `photo_grid` hands the next screenful of rows in the scroll direction to `thumbs::prefetch` (low-priority jobs; a visible request promotes them). At the end of the timeline, where it opens, the rows above are warmed.
 - The RGBA->BGRA swap and `RenderImage` construction run in `background_spawn` (`pump`), only the atlas insert stays on the main thread.
+- Concurrency: `MAX_ACTIVE` 16 loads, of which at most `MAX_NET` 6 use the network; "cheap" loads (stored download or persistent thumbnail cache) are never held back by a fling. Failed loads retry by time (`RETRY_MS` x tries, a timer re-renders the view), not by frames: Alben do not render continuously and used to never retry. Every view that shows thumbnails must call `begin_frame` once per render (`album_browser` does).
 - Running `t:` loads not asked for in `STALE_FRAMES` frames are aborted (`host::Cancel`; web: `AbortController`, desktop cannot abort ureq and only skips the decode). Previews/full sizes are never aborted.
 - `serve.py` sends `no-store` only for non-`/api/` paths (Immich's own `private, max-age=86400` reaches the browser) and keeps proxied responses with a length on a keep-alive HTTP/1.1 connection.
 
@@ -180,3 +181,12 @@ Videos are played by the app itself, no `<video>` element and no browser control
 - **Downloads** (`immagine/downloads.rs`): the viewer's top-right button stores the original in IndexedDB db `downloads` (key = asset id, `Host::blob_put`); `Host::blob_keys` lists the stored ids at start (`Downloads.ids`, shared with the grid's row builder). The grid marks stored photos with a tiny tray+check at the bottom right (beside a video's length) and favorites with a white heart at the bottom left. Logout clears the db. Nothing reads the stored bytes back yet (no offline viewing).
 - **Offline / cache first for downloads:** db `downloads` holds the original (photos) or the `video/playback` H.264 file (videos) under the bare asset id, plus `t:<id>` and `p:<id>` (thumbnail and preview, fetched at download time). `thumbs::pump` reads `t:`/`p:`/`f:` keys of downloaded assets from there (`Host::decode_bytes`; `f:` decodes the stored original) before `decode_url`; `Player::open(url, local_id, cx)` plays a downloaded video from the stored bytes (`open_full`) without requests. `Thumbs.local` shares `Downloads.ids`; never replace `downloads` wholesale (clear it), or the sharing breaks. Downloads made before this change have no `t:`/`p:` entries (grid still needs the network for them; download again). Not done: EXIF/info panel offline, timeline sync offline (it shows the stored snapshot).
 - Tapping the viewer's download button on a stored photo deletes it (`Host::blob_delete` for the bare id, `t:<id>`, `p:<id>`); no confirmation.
+
+## Tests with GPUI
+
+- `cargo test --lib` also runs view tests: `gpui` is a dev-dependency with `test-support` (`TestAppContext::single()`, `add_window_view`, `simulate_click`). `gpui::test` macro is unusable here (use `#[::core::prelude::v1::test]`, since `use super::*` glob-imports gpui's `test` macro and recurses), and `use ::gpui::...` is needed in test modules to avoid an ambiguous `gpui`.
+- Viewer buttons must come from `viewer::glass_button` (occludes), otherwise a click also reaches the photo layer and toggles the controls; `button_click_does_not_reach_the_photo` guards this.
+
+## Settings / debug
+
+- The settings sheet also holds the logout row ("Konto") and a "FPS anzeigen" switch (persisted as `immagine.debug`, shows `fps_badge`). The Mediathek header no longer has Abmelden. Tapping the already selected Mediathek tab in the tab bar scrolls to the newest photos (`slider_end`, resets `timeline_placed`). Month labels at 15 columns scale with the cell size.

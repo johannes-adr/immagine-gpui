@@ -1,6 +1,6 @@
 //! Settings sheet, opened by the gear at the top right of Sammlungen: what the app stores and how it runs.
 
-use super::{downloads::DOWNLOAD_DB, thumbs::{self, THUMB_CACHE_DB}, video_player::DISK_DB, Immagine, DB};
+use super::{DEBUG_KEY, downloads::DOWNLOAD_DB, thumbs::{self, THUMB_CACHE_DB}, video_player::DISK_DB, Immagine, DB};
 use crate::components::sheet::{self, Sheet};
 use crate::host::{AppInfo, Current as H, Host, Pinch};
 use crate::theme::{Palette, BLUE};
@@ -206,6 +206,52 @@ impl Immagine {
                 row(p, "Threads", info.as_ref().map_or_else(unknown, |i| if i.threads { "An".into() } else { "Aus".into() }), false),
             ],
         );
+        let debug = self.debug;
+        let toggle = div().border_t_1().border_color(p.separator).child(
+            div()
+                .id("settings-debug")
+                .min_h(px(48.))
+                .px_4()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .text_size(px(17.))
+                .active(|s| s.opacity(0.6))
+                .child("FPS anzeigen")
+                .child(
+                    {
+                        let track = div().w(px(51.)).h(px(31.)).rounded_full().p(px(2.)).flex();
+                        if debug { track.justify_end() } else { track }
+                    }
+                        .bg(if debug { rgb(0x34c759) } else { rgb(0x78788033) })
+                        .child(div().size(px(27.)).rounded_full().bg(rgb(0xffffff))),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.debug = !this.debug;
+                    H::setting_set(DEBUG_KEY, if this.debug { "1" } else { "0" });
+                    cx.notify();
+                })),
+        );
+        let debug_group = group(card, "Debug", p, vec![div().child(toggle)]);
+        let account = group(
+            card,
+            "Konto",
+            p,
+            vec![div().child(
+                div()
+                    .id("settings-logout")
+                    .min_h(px(48.))
+                    .px_4()
+                    .flex()
+                    .items_center()
+                    .text_size(px(17.))
+                    .text_color(rgb(0xff3b30))
+                    .active(|s| s.opacity(0.6))
+                    .child("Abmelden")
+                    .on_click(cx.listener(|this, _, _, cx| this.log_out(cx))),
+            )],
+        );
         let content = div()
             .px_4()
             .pb(px(self.bottom.max(16.)))
@@ -214,6 +260,8 @@ impl Immagine {
             .gap_6()
             .child(storage)
             .child(app)
+            .child(debug_group)
+            .child(account)
             .into_any_element();
         Some(sheet::overlay(
             sheet,

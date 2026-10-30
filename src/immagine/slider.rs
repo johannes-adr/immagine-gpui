@@ -56,6 +56,11 @@ impl Slider {
         }
     }
 
+    /// Whether the press going now has travelled beyond a tap.
+    pub(super) fn moved(&self) -> bool {
+        self.drag.is_some_and(|d| d.moved)
+    }
+
     pub(super) fn begin(&mut self, sel: usize, x: f32, left: f32, slot: f32) {
         let pos = sel as f32;
         self.drag = Some(Drag { pos, grab: x - (left + (pos + 0.5) * slot), start_x: x, moved: false });

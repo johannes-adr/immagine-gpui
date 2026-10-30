@@ -389,17 +389,19 @@ impl Immagine {
                         .gap(px(gap))
                         .children(tiles)
                         .children(label.map(|text| {
+                            // Sized by the row, so labels of neighbouring rows do not overlap at 15 columns.
+                            let h = (cell * 0.72).clamp(14., 28.);
                             div()
                                 .absolute()
-                                .top(px(cell / 2. - 16.))
-                                .left(px(8.))
-                                .h(px(32.))
-                                .px_3()
+                                .top(px((cell - h) / 2.))
+                                .left(px(4.))
+                                .h(px(h))
+                                .px(px(h * 0.4))
                                 .flex()
                                 .items_center()
                                 .rounded_full()
                                 .bg(rgba(0x000000a6))
-                                .text_size(px(22.))
+                                .text_size(px(h * 0.55))
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(rgb(0xffffff))
                                 .child(text)
@@ -523,15 +525,6 @@ impl Immagine {
                                     .child(div().text_size(px(34.)).font_weight(FontWeight::BOLD).child("Mediathek"))
                                     .child(div().text_size(px(15.)).text_color(p.secondary).child(subtitle)),
                             )
-                            .child(
-                                div()
-                                    .id("logout")
-                                    .text_size(px(15.))
-                                    .text_color(p.secondary)
-                                    .active(|s| s.opacity(0.6))
-                                    .child("Abmelden")
-                                    .on_click(cx.listener(|this, _, _, cx| this.log_out(cx))),
-                            ),
                     ),
             )
     }

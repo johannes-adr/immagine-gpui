@@ -186,6 +186,8 @@ impl Immagine {
     /// One folder level: a breadcrumb and back chip for nested folders, then folder and album tiles.
     fn album_browser(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let st = &self.albums;
+        // Ages the image store (retries, aborts, LRU), which otherwise only the grids and the people list do.
+        self.thumbs.borrow_mut().begin_frame();
         let vw: f32 = window.viewport_size().width.into();
         let columns = ((vw / TILE_MIN).floor() as usize).clamp(2, 6);
         let tile = ((vw - 2. * PAD - GAP * (columns as f32 - 1.)) / columns as f32).floor().max(40.);

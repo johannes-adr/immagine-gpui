@@ -30,13 +30,17 @@ const WAKE_MS: u64 = 150;
 /// A gap between scroll samples longer than this was a pause, not a speed.
 const SAMPLE_GAP_MS: f64 = 100.;
 
-const MAX_ACTIVE: usize = 6;
+/// Loads running at once, and how many of them may use the network. Loads from the persistent cache or a stored
+/// download are cheap (no request) and are not held back by a fling.
+const MAX_ACTIVE: usize = 16;
+const MAX_NET: usize = 6;
 /// Decoded pixels kept in memory (RGBA = 4 bytes per pixel).
 const BYTE_BUDGET: usize = 160 * 1024 * 1024;
 /// A queued request not asked for again within this many frames has scrolled out of sight.
 const STALE_FRAMES: u64 = 4;
-/// A failed load is retried after this many frames, at most `MAX_TRIES` times in all.
-const RETRY_FRAMES: u64 = 40;
+/// A failed load is retried after this long (times the number of tries so far), at most `MAX_TRIES` times in all.
+/// Time, not frames: views that do not render continuously (Alben) would otherwise never retry.
+const RETRY_MS: f64 = 1000.;
 const MAX_TRIES: u8 = 4;
 
 struct Entry {
@@ -62,6 +66,7 @@ struct Job {
 struct Running {
     cancel: Cancel,
     frame: u64,
+    net: bool,
 }
 
 /// Keys of `THUMB_CACHE_DB`, kept in memory so a miss never touches IndexedDB. `known` holds the names as
@@ -128,12 +133,13 @@ pub(super) struct Thumbs {
     images: HashMap<String, Entry>,
     running: HashMap<String, Running>,
     queue: Vec<Job>,
-    /// Keys whose load failed: the frame it happened in and how often. They are retried a few times.
-    failed: HashMap<String, (u64, u8)>,
+    /// Keys whose load failed: when it happened (ms) and how often. They are retried a few times.
+    failed: HashMap<String, (f64, u8)>,
     evicted: Vec<Arc<RenderImage>>,
     frame: u64,
     seq: u64,
     active: usize,
+    net_active: usize,
     bytes: usize,
     view: WeakEntity<Immagine>,
     /// Assets kept in IndexedDB (shared with `Downloads`): their renditions are read from there before the network.
@@ -160,6 +166,7 @@ pub(super) fn new(view: WeakEntity<Immagine>, local: Rc<RefCell<HashSet<String>>
         frame: 0,
         seq: 0,
         active: 0,
+        net_active: 0,
         bytes: 0,
         view,
         local,
@@ -209,6 +216,12 @@ impl Thumbs {
         self.up
     }
 
+    /// Whether the job can be served without the network (a stored download or the persistent thumbnail cache).
+    fn cheap(&self, key: &str, url: &str) -> bool {
+        let local = key.split_once(':').is_some_and(|(_, id)| self.local.borrow().contains(id));
+        local || cache_key(key, url).is_some_and(|k| self.cache.known.contains(&norm(&k)))
+    }
+
     fn held(&self) -> bool {
         self.speed > FLING_SPEED && H::now_ms() - self.speed_at < FLING_FRESH_MS
     }
@@ -229,9 +242,8 @@ impl Thumbs {
     }
 
     fn fail(&mut self, key: &str) {
-        let frame = self.frame;
         let tries = self.failed.get(key).map_or(0, |f| f.1) + 1;
-        self.failed.insert(key.to_string(), (frame, tries));
+        self.failed.insert(key.to_string(), (H::now_ms(), tries));
     }
 
     fn insert(&mut self, key: String, image: Arc<RenderImage>, bytes: usize, side: u32) {
@@ -299,7 +311,7 @@ pub(super) fn get_sized(store: &SharedThumbs, key: &str, min_side: u32, url: imp
         }
         if let Some(&(at, tries)) = s.failed.get(key) {
             // A failed load (network hiccup, decoder busy) is tried again a little later, a few times.
-            if tries >= MAX_TRIES || frame < at + RETRY_FRAMES {
+            if tries >= MAX_TRIES || H::now_ms() < at + RETRY_MS * tries as f64 {
                 return have;
             }
         }
@@ -307,16 +319,18 @@ pub(super) fn get_sized(store: &SharedThumbs, key: &str, min_side: u32, url: imp
             job.frame = frame;
             job.low = false;
             job.side = bigger(job.side, min_side);
-        } else if s.held() {
-            let wake = !std::mem::replace(&mut s.wake_pending, true);
-            drop(s);
-            if wake {
-                schedule_wake(store, cx);
-            }
-            return have;
         } else {
+            let url = url();
+            if s.held() && !s.cheap(key, &url) {
+                let wake = !std::mem::replace(&mut s.wake_pending, true);
+                drop(s);
+                if wake {
+                    schedule_wake(store, cx);
+                }
+                return have;
+            }
             s.seq += 1;
-            let job = Job { key: key.to_string(), url: url(), side: min_side, frame, seq: s.seq, low: false };
+            let job = Job { key: key.to_string(), url, side: min_side, frame, seq: s.seq, low: false };
             s.queue.push(job);
         }
         have
@@ -369,6 +383,16 @@ pub(super) fn prefetch<'a, F: FnOnce() -> String>(
     pump(store, cx);
 }
 
+/// Re-renders the view after `ms`, so tiles whose load failed ask for their image again.
+fn schedule_retry(store: &SharedThumbs, ms: f64, cx: &mut App) {
+    let view = store.borrow().view.clone();
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(Duration::from_millis(ms as u64)).await;
+        view.update(cx, |_, cx| cx.notify()).ok();
+    })
+    .detach();
+}
+
 /// Notifies the view after a moment, so the loads held back during a fling start once it slowed down.
 fn schedule_wake(store: &SharedThumbs, cx: &mut App) {
     let store = store.clone();
@@ -403,24 +427,34 @@ fn pump(store: &SharedThumbs, cx: &mut App) {
             if s.active >= MAX_ACTIVE {
                 return;
             }
-            if s.held() {
-                // Queued jobs wait for the fling to slow; if it stops dead no frame would start them otherwise.
-                let wake = !s.queue.is_empty() && !std::mem::replace(&mut s.wake_pending, true);
+            let frame = s.frame;
+            s.queue.retain(|j| j.frame + STALE_FRAMES >= frame);
+            // Network loads wait for a fling to slow and for a free connection slot; cheap ones (cache, downloads) run.
+            let held = s.held();
+            let net_free = s.net_active < MAX_NET;
+            // Visible requests before prefetch, then newest frame first (what the user is looking at now), then request order.
+            let next = s
+                .queue
+                .iter()
+                .enumerate()
+                .filter(|(_, j)| s.cheap(&j.key, &j.url) || (!held && net_free))
+                .max_by_key(|(_, j)| (!j.low, j.frame, std::cmp::Reverse(j.seq)))
+                .map(|(i, _)| i);
+            let Some(index) = next else {
+                // If the fling stops dead no frame would start the waiting network loads otherwise.
+                let wake = held && !s.queue.is_empty() && !std::mem::replace(&mut s.wake_pending, true);
                 drop(s);
                 if wake {
                     schedule_wake(store, cx);
                 }
                 return;
-            }
-            let frame = s.frame;
-            s.queue.retain(|j| j.frame + STALE_FRAMES >= frame);
-            // Visible requests before prefetch, then newest frame first (what the user is looking at now), then request order.
-            let next = s.queue.iter().enumerate().max_by_key(|(_, j)| (!j.low, j.frame, std::cmp::Reverse(j.seq))).map(|(i, _)| i);
-            let Some(index) = next else { return };
+            };
             let job = s.queue.swap_remove(index);
+            let net = !s.cheap(&job.key, &job.url);
             let cancel = Cancel::new();
-            s.running.insert(job.key.clone(), Running { cancel: cancel.clone(), frame: job.frame });
+            s.running.insert(job.key.clone(), Running { cancel: cancel.clone(), frame: job.frame, net });
             s.active += 1;
+            s.net_active += net as usize;
             (job, cancel)
         };
         let store = store.clone();
@@ -536,10 +570,13 @@ pub(super) fn clear_cache(store: &SharedThumbs) {
 }
 
 fn finish(store: &SharedThumbs, key: &str, side: u32, result: Result<(Arc<RenderImage>, usize), String>, cancel: &Cancel, cx: &mut App) {
+    let mut retry = None;
     let view = {
         let mut s = store.borrow_mut();
         s.active -= 1;
-        s.running.remove(key);
+        if s.running.remove(key).is_some_and(|r| r.net) {
+            s.net_active -= 1;
+        }
         match result {
             Ok((image, bytes)) => {
                 s.failed.remove(key);
@@ -547,10 +584,16 @@ fn finish(store: &SharedThumbs, key: &str, side: u32, result: Result<(Arc<Render
             }
             // An aborted load is not a failure: the tile is simply asked for again if it comes back.
             Err(_) if cancel.is_cancelled() => {}
-            Err(_) => s.fail(key),
+            Err(_) => {
+                s.fail(key);
+                retry = Some(RETRY_MS * s.failed.get(key).map_or(1, |f| f.1) as f64 + 50.);
+            }
         }
         s.view.clone()
     };
+    if let Some(wait) = retry {
+        schedule_retry(store, wait, cx);
+    }
     pump(store, cx);
     view.update(cx, |_, cx| cx.notify()).ok();
 }

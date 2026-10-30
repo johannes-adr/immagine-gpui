@@ -36,6 +36,8 @@ use std::time::Duration;
 const DB: &str = "immagine";
 const SNAPSHOT_KEY: &str = "store";
 const TOKEN_KEY: &str = "immagine.token";
+/// Persisted debug switch of the settings sheet ("1" = on): shows the FPS badge.
+const DEBUG_KEY: &str = "immagine.debug";
 /// The server typed at login; the hosts read it to know where to send requests.
 const SERVER_KEY: &str = "immagine.server";
 
@@ -69,6 +71,7 @@ pub(crate) struct Immagine {
     meter: Rc<FpsMeter>,
     fps: u32,
     worst_ms: u32,
+    debug: bool,
     webgpu: bool,
     tab: usize,
     tab_gen: u32,
@@ -207,6 +210,7 @@ impl Immagine {
             dark,
             meter: Rc::new(FpsMeter::default()),
             fps: 0,
+            debug: H::setting_get(DEBUG_KEY).as_deref() == Some("1"),
             worst_ms: 0,
             webgpu,
             tab: 0,
@@ -367,7 +371,7 @@ impl Immagine {
         .detach();
     }
 
-    fn log_out(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn log_out(&mut self, cx: &mut Context<Self>) {
         H::setting_remove(TOKEN_KEY);
         self.token.clear();
         self.engine = None;
@@ -377,6 +381,7 @@ impl Immagine {
         self.people = Default::default();
         self.search = Default::default();
         self.viewer = None;
+        self.settings.sheet.close();
         self.tab = 0;
         self.screen = Screen::Login;
         self.downloads.ids.borrow_mut().clear();
@@ -546,7 +551,6 @@ impl Render for Immagine {
             .children(viewer)
             .children(chrome.into_iter().flatten())
             .children(settings)
-            // FPS debug badge, re-enable when profiling:
-            // .child(fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, self.webgpu))
+            .children(self.debug.then(|| fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, self.webgpu)))
     }
 }
