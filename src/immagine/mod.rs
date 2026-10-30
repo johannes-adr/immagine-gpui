@@ -6,6 +6,8 @@
 mod albums;
 mod login;
 mod people;
+mod range_views;
+mod slider;
 mod icons;
 mod tab_bar;
 mod thumbs;
@@ -66,18 +68,39 @@ pub(crate) struct Immagine {
     webgpu: bool,
     tab: usize,
     tab_gen: u32,
-    // Tab bar thumb: drag in progress, where it started its last move (tab units) and the bubble size then.
-    tab_drag: Option<tab_bar::TabDrag>,
-    tab_from: f32,
-    bubble_from: f32,
-    thumb_gen: u32,
+    /// Glass thumbs of the tab bar and of the Jahre / Monate / Alle bar.
+    tabs_slider: slider::Slider,
+    range_slider: slider::Slider,
+    /// Scrolled away from the newest photos, the tab bar is replaced by the Jahre / Monate / Alle bar.
+    range_bar: bool,
+    range_mode: usize,
+    /// Where the list was (px from its end) when the Mediathek button was tapped; the tab bar stays meanwhile.
+    range_latch: Option<f32>,
+    /// Jahre / Monate lists: their scroll handles, whether they were put at the newest end, the groups of the
+    /// current items, and rows other views ask them (or the photo grid) to bring into view once.
+    years_scroll: UniformListScrollHandle,
+    months_scroll: UniformListScrollHandle,
+    years_placed: std::cell::Cell<bool>,
+    months_placed: std::cell::Cell<bool>,
+    months_jump: std::cell::Cell<Option<usize>>,
+    timeline_jump: std::cell::Cell<Option<usize>>,
+    range_cache: RefCell<Option<(Rc<Vec<TimelineItem>>, Rc<crate::logic::range_groups::Groups>)>>,
+    /// When the timeline was last told to jump to its end; until it has, its scroll position says nothing.
+    scroll_settle: std::cell::Cell<f64>,
+    swap_at: f64,
+    swap_gen: u32,
     /// The timeline shows the newest photos at the bottom and starts scrolled there.
     timeline_scroll: UniformListScrollHandle,
     timeline_placed: std::cell::Cell<bool>,
+    /// Columns of the timeline grid (a step of `ZOOM_LEVELS`), the pinch scale gathered since the last step, the
+    /// photos (first, last index) the grid built last, and the span the header shows.
+    grid_cols: usize,
+    grid_scale: f32,
+    visible: Rc<std::cell::Cell<(usize, usize)>>,
+    header_span: std::cell::Cell<(usize, usize)>,
     /// Rubber band shared by every scroll view (timeline, albums, people, their pages).
     rubber: RubberBand,
     albums_scroll: ScrollHandle,
-    thumb_at: f64,
     /// Screen bounds of the tiles painted last, so the viewer can zoom out of the tapped one.
     tile_bounds: Rc<RefCell<HashMap<usize, TileRect>>>,
     grid_bounds: Rc<std::cell::Cell<Bounds<Pixels>>>,
@@ -162,15 +185,29 @@ impl Immagine {
             webgpu,
             tab: 0,
             tab_gen: 0,
-            tab_drag: None,
-            tab_from: 0.,
-            bubble_from: 0.,
-            thumb_gen: 0,
+            tabs_slider: Default::default(),
+            range_slider: Default::default(),
+            range_bar: false,
+            range_mode: 2,
+            range_latch: None,
+            years_scroll: UniformListScrollHandle::new(),
+            months_scroll: UniformListScrollHandle::new(),
+            years_placed: std::cell::Cell::new(false),
+            months_placed: std::cell::Cell::new(false),
+            months_jump: std::cell::Cell::new(None),
+            timeline_jump: std::cell::Cell::new(None),
+            range_cache: RefCell::new(None),
+            scroll_settle: std::cell::Cell::new(f64::NEG_INFINITY),
+            swap_at: f64::NEG_INFINITY,
+            swap_gen: 0,
             timeline_scroll: UniformListScrollHandle::new(),
             timeline_placed: std::cell::Cell::new(false),
+            grid_cols: 3,
+            grid_scale: 1.,
+            visible: Rc::new(std::cell::Cell::new((0, 0))),
+            header_span: std::cell::Cell::new((0, 0)),
             rubber: Default::default(),
             albums_scroll: ScrollHandle::new(),
-            thumb_at: 0.,
             tile_bounds: Rc::new(RefCell::new(HashMap::new())),
             grid_bounds: Rc::new(std::cell::Cell::new(Bounds::default())),
             viewer: None,
@@ -181,6 +218,7 @@ impl Immagine {
             people: Default::default(),
         };
         this.resume(cx);
+        this.ensure_gestures(cx);
         this
     }
 
@@ -382,7 +420,11 @@ impl Immagine {
         }
         let list = |h: &UniformListScrollHandle| h.0.borrow().base_handle.clone();
         Some(match self.tab {
-            0 => list(&self.timeline_scroll),
+            0 => match self.range_mode {
+                0 => list(&self.years_scroll),
+                1 => list(&self.months_scroll),
+                _ => list(&self.timeline_scroll),
+            },
             1 => match self.albums.open_scroll() {
                 Some(scroll) => list(scroll),
                 None => self.albums_scroll.clone(),
@@ -403,14 +445,19 @@ impl Render for Immagine {
         let content = match self.screen {
             Screen::Loading => div().into_any_element(),
             Screen::Login => self.login_view(&p, cx).into_any_element(),
-            Screen::Timeline if self.tab == 0 => self.timeline_view(&p, window, cx).into_any_element(),
+            Screen::Timeline if self.tab == 0 => match self.range_mode {
+                0 => self.years_view(&p, window, cx),
+                1 => self.months_view(&p, window, cx),
+                _ => self.timeline_view(&p, window, cx).into_any_element(),
+            },
             Screen::Timeline if self.tab == 1 => self.albums_view(&p, window, cx),
             Screen::Timeline => self.people_view(&p, window, cx),
         };
         // The renderer copies the glass backdrop once per frame at the first glass element; with the tab bar
         // gone while the viewer is open, the viewer's own glass sees the photo instead of the grid.
         let viewer_open = self.viewer.as_ref().is_some_and(|v| !v.closing);
-        let chrome = (self.screen == Screen::Timeline && !viewer_open).then(|| self.tab_bar(&p, window, cx));
+        self.sync_range_bar(viewer_open, cx);
+        let chrome = (self.screen == Screen::Timeline && !viewer_open).then(|| self.bars(&p, window, cx));
         let viewer = if self.screen == Screen::Timeline { self.viewer_overlay(window, cx) } else { None };
         div()
             .size_full()
@@ -428,7 +475,7 @@ impl Render for Immagine {
             // none of them. This almost invisible layer above the content lifts everything painted after it.
             .child(div().absolute().top_0().left_0().size_full().bg(rgba(0x00000001)))
             .children(viewer)
-            .children(chrome)
+            .children(chrome.into_iter().flatten())
             // FPS debug badge, re-enable when profiling:
             // .child(fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, self.webgpu))
     }
