@@ -69,7 +69,25 @@ Glass semantics to remember: later glass elements do not see content painted bet
 - Requirements, all in place: `build.sh` compiles with `+atomics,+bulk-memory,+mutable-globals`, `-Z build-std=std,panic_abort` and explicit linker args (`--shared-memory --import-memory --max-memory=1 GiB` plus the `__tls_*`/`__wasm_init_tls` exports; this nightly does not add them itself, without them the memory silently stays unshared). The page must be `crossOriginIsolated`: `serve.py` sends `COOP: same-origin` + `COEP: require-corp`, `sw.js` adds them to the responses it serves (static hosts get threads from the second launch).
 - Without isolation (`COI=0 python3 serve.py`, same build) GPUI logs `falling back to single-threaded dispatcher` and the app runs on one thread. Check with `crossOriginIsolated` in the console and the 10 `using deprecated parameters for the initialization function` warnings (one per worker init).
 - Verified: Chrome (browser pane), iOS 27 Safari (WebGPU) and iOS 18.4 Safari (prerequisites + app boots to login, WebGL2). Safari has no `COEP: credentialless`, so cross-origin subresources need CORS (our `fetch` calls do) or a CORP header.
-- Rules for background work: only `Send` Rust work (JSON parsing, store serialization, grouping) goes to workers; `Host` calls (fetch, IndexedDB, createImageBitmap, video) are JS objects and stay on the main thread. Never block or lock a contended `std::sync::Mutex` on the main thread: `memory.atomic.wait` traps there.
+- **How to offload work** (from a view method; the closure body runs on a worker, everything else on the main thread):
+  ```rust
+  self.serial += 1;
+  let serial = self.serial;
+  cx.spawn(async move |this, cx| {
+      // Moved in by value; must be `Send + 'static`. Returns the result to the awaiting main-thread task.
+      let parsed = cx.background_spawn(async move { parse(&bytes) }).await;
+      let _ = this.update(cx, |t, cx| {
+          if t.serial == serial { t.apply(parsed); cx.notify(); } // drop stale results
+      });
+  })
+  .detach(); // a dropped `Task` is cancelled: `.detach()` it or keep it in a field
+  ```
+- **What may go into `background_spawn`:** pure Rust CPU work on owned, `Send` data: JSON parsing (`logic::json`, sync pages), store serialization (`MemoryStore` to/from bytes), `logic::range_groups`, grouping/sorting the timeline. `logic/` functions are the natural unit: they have no gpui or platform imports.
+- **What may not:** anything holding `Rc`, `RefCell`, entities, `Window`/`App`/`Context`, or `Host` handles. `Host` calls (fetch, IndexedDB, localStorage, `createImageBitmap`, video, gestures) wrap JS objects that exist only on the main thread; `await` them in `cx.spawn`, then hand the bytes to `background_spawn`. Data held in `Rc<Vec<..>>` must be cloned into an owned `Vec` (or the field changed to `Arc`) before it can move; for very large data measure whether the clone costs more than the work.
+- **Locks:** never block on the main thread. A contended `std::sync::Mutex::lock`/`Condvar`/`thread::join` there traps on the web (`memory.atomic.wait` is forbidden on the main thread) and stalls the UI on desktop. Pass data by value and return results through the task instead of sharing state.
+- **It is not guaranteed to be parallel:** with the single-thread fallback (no isolation, old Safari) `background_spawn` runs on the main thread between frames. Split very long jobs (tens of ms) into chunks or yield, so the fallback does not freeze the UI.
+- **Desktop I/O:** blocking I/O (ureq, `std::fs`) stays in `host/desktop/blocking.rs`, not in `background_spawn`; blocking the executor's pool threads starves other background tasks.
+- **Timers:** `cx.background_executor().timer(d).await` inside `cx.spawn` only waits; it does not move the task off the main thread.
 - Rendering and layout stay on the main thread, so threads only help once CPU work is moved off it. Boot times are unchanged (warm: first frame ~130-180 ms either way); the first cold load compiles the module per worker.
 
 ## GPUI patterns used here
