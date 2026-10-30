@@ -1,11 +1,14 @@
 import http.client, http.server, os, socket, socketserver, ssl, subprocess, threading, urllib.parse
 
-HTTP_PORT, HTTPS_PORT = 8080, 8443
+# PORT=8090 python3 serve.py runs a second server (e.g. from a worktree) next to the default one.
+HTTP_PORT = int(os.environ.get("PORT", 8080))
+HTTPS_PORT = HTTP_PORT + 363
 CERT_DIR = "certs"
 
 # Dev default: serve a service worker that deletes its caches and unregisters itself, so every reload
 # gets fresh files. `PWA=1 python3 serve.py` serves the real, caching sw.js instead.
 PWA = os.environ.get("PWA") == "1"
+COI = os.environ.get("COI") != "0"
 KILL_SW = b"""self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (e) => e.waitUntil((async () => {
   for (const k of await caches.keys()) await caches.delete(k);
@@ -88,6 +91,11 @@ class H(http.server.SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")
+        # Cross-origin isolation: SharedArrayBuffer, so the wasm threads (GPUI background executor) run.
+        # COI=0 leaves it out: same build, GPUI falls back to one thread (for A/B comparisons).
+        if COI:
+            self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+            self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
         super().end_headers()
 
 class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):

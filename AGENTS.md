@@ -14,7 +14,7 @@ python3 serve.py                                   # dev: service worker disable
 ```
 
 - Needs **nightly** Rust (`rust-toolchain.toml`); stable fails inside the `wasm_thread` dependency.
-- If `serve.py` says "Address already in use", an old server holds the port: `lsof -ti tcp:8080 | xargs kill`.
+- If `serve.py` says "Address already in use", an old server holds the port: `lsof -ti tcp:8080 | xargs kill`. `PORT=8090 python3 serve.py` runs a second one (e.g. from a worktree; HTTPS is `PORT+363`).
 - `assets/Arial.ttf` and `assets/Arial-Bold.ttf` are git-ignored but `include_bytes!`'d in `src/web.rs`; the build fails without them. The web platform ships no fonts and panics when none are loaded before the window opens.
 - `build.sh` also runs `wasm-opt -O3` (binaryen) and precompresses wasm/js to `.br`/`.gz`; `brew install binaryen brotli`. Do not use `wasm-opt --all-features` (produces wasm browsers reject: "unknown import kind"); the explicit `--enable-*` list incl. `--enable-threads` is required.
 - `assets/*.sub.ttf` (what the build embeds) are Latin subsets of the Arial files, made by `./subset-fonts.sh` (needs fonttools); they are git-ignored like the originals.
@@ -62,6 +62,15 @@ All tab code is `impl Todos` split across the child modules of `app`; the struct
 - `vendor/gpui-pre-web` (`window.rs`): `MAX_RENDER_DPR = 2.0` caps the canvas backing-store scale (3x phones otherwise draw 2.25x the pixels).
 
 Glass semantics to remember: later glass elements do not see content painted between glass batches; glass ignores GPUI content masks (no clipping when partly scrolled out); children of `glass_div` paint after the glass and stay crisp. The glass layer is an absolute `canvas` and needs explicit `top_0().left_0()`, otherwise it is offset by the parent's padding.
+
+## Threads (web and desktop)
+
+- The threading abstraction is GPUI's own: `cx.background_spawn(...)` / `cx.background_executor()`. Desktop: a native thread pool. Web: `vendor/gpui-pre-web/src/dispatcher.rs` starts `hardwareConcurrency` Web Workers via `wasm_thread` that share the wasm memory; results come back to the main thread through a mailbox woken by `Atomics.waitAsync`. It is platform-neutral gpui, so `immagine/` and `logic/` may use it without a `Host` method.
+- Requirements, all in place: `build.sh` compiles with `+atomics,+bulk-memory,+mutable-globals`, `-Z build-std=std,panic_abort` and explicit linker args (`--shared-memory --import-memory --max-memory=1 GiB` plus the `__tls_*`/`__wasm_init_tls` exports; this nightly does not add them itself, without them the memory silently stays unshared). The page must be `crossOriginIsolated`: `serve.py` sends `COOP: same-origin` + `COEP: require-corp`, `sw.js` adds them to the responses it serves (static hosts get threads from the second launch).
+- Without isolation (`COI=0 python3 serve.py`, same build) GPUI logs `falling back to single-threaded dispatcher` and the app runs on one thread. Check with `crossOriginIsolated` in the console and the 10 `using deprecated parameters for the initialization function` warnings (one per worker init).
+- Verified: Chrome (browser pane), iOS 27 Safari (WebGPU) and iOS 18.4 Safari (prerequisites + app boots to login, WebGL2). Safari has no `COEP: credentialless`, so cross-origin subresources need CORS (our `fetch` calls do) or a CORP header.
+- Rules for background work: only `Send` Rust work (JSON parsing, store serialization, grouping) goes to workers; `Host` calls (fetch, IndexedDB, createImageBitmap, video) are JS objects and stay on the main thread. Never block or lock a contended `std::sync::Mutex` on the main thread: `memory.atomic.wait` traps there.
+- Rendering and layout stay on the main thread, so threads only help once CPU work is moved off it. Boot times are unchanged (warm: first frame ~130-180 ms either way); the first cold load compiles the module per worker.
 
 ## GPUI patterns used here
 
