@@ -672,14 +672,13 @@ impl Immagine {
                             el = match grid {
                                 // Shrinking into a tile that scrolls: the photo is clipped to the grid, so it never
                                 // floats over the header or the tab bar.
-                                // The clip grows from the whole screen to the grid as the photo shrinks, so closing starts
-                                // without a visible cut.
-                                Some((gx, gy, gw, gh)) if closing => {
-                                    // The animation eases out, so `t` falls fast at first: keep the whole screen until the
-                                    // photo is about half way down, then pull the clip in.
+                                // Only the top edge is clipped (the header): it moves from the screen's top to the grid's
+                                // top once the photo is half way to its tile. Sides and bottom stay open so a wrong
+                                // measurement can never cut the photo off.
+                                Some((_, gy, _, _)) if closing => {
                                     let k = ((0.5 - t) / 0.5).clamp(0., 1.);
-                                    let (cx_, cy_, cw, ch) = (lerp(0., gx, k), lerp(0., gy, k), lerp(vw, gw, k), lerp(vh, gh, k));
-                                    el.child(div().absolute().left(px(cx_)).top(px(cy_)).w(px(cw)).h(px(ch)).overflow_hidden().child(photo(cx_, cy_)))
+                                    let cy_ = lerp(0., gy, k);
+                                    el.child(div().absolute().left_0().top(px(cy_)).w(px(vw)).h(px(vh - cy_)).overflow_hidden().child(photo(0., cy_)))
                                 }
                                 _ => el.child(photo(0., 0.)),
                             };
