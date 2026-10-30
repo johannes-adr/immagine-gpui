@@ -161,6 +161,18 @@ impl<T: HttpTransport> ImmichClient<T> {
         self.fetch_json(request(Method::Post, "/api/search/metadata", Some(token), Some(body))).await
     }
 
+    /// `POST /api/search/smart`: natural-language (CLIP) search. `kind` is `IMAGE` or `VIDEO` to restrict the media type.
+    pub async fn smart_search(&self, query: &str, kind: Option<&str>, page: u32, size: u32, token: &str) -> Result<SearchMetadataResponse, ClientError> {
+        let body = json_body(&TextSearchBody { query: Some(query), original_file_name: None, kind, page, size, with_archived: true })?;
+        self.fetch_json(request(Method::Post, "/api/search/smart", Some(token), Some(body))).await
+    }
+
+    /// `POST /api/search/metadata` filtered by (part of) the original file name.
+    pub async fn filename_search(&self, name: &str, kind: Option<&str>, page: u32, size: u32, token: &str) -> Result<SearchMetadataResponse, ClientError> {
+        let body = json_body(&TextSearchBody { query: None, original_file_name: Some(name), kind, page, size, with_archived: true })?;
+        self.fetch_json(request(Method::Post, "/api/search/metadata", Some(token), Some(body))).await
+    }
+
     pub async fn asset(&self, id: &str, token: &str) -> Result<Asset, ClientError> {
         self.fetch_json(request(Method::Get, format!("/api/assets/{}", encode(id)), Some(token), None)).await
     }
@@ -528,6 +540,20 @@ struct SearchBody {
     page: u32,
     size: u32,
     with_deleted: bool,
+    with_archived: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TextSearchBody<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    query: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    original_file_name: Option<&'a str>,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    kind: Option<&'a str>,
+    page: u32,
+    size: u32,
     with_archived: bool,
 }
 

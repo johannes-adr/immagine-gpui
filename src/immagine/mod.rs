@@ -7,6 +7,7 @@ mod albums;
 mod login;
 mod people;
 mod icons;
+mod search;
 mod tab_bar;
 mod thumbs;
 mod timeline;
@@ -87,6 +88,7 @@ pub(crate) struct Immagine {
     pinch: Option<GestureHandle>,
     albums: albums::AlbumsState,
     people: people::PeopleState,
+    search: search::SearchState,
 }
 
 /// The timeline is stored newest first; the grid reads oldest first, so the newest photos sit at the bottom.
@@ -179,6 +181,7 @@ impl Immagine {
             pinch: None,
             albums: Default::default(),
             people: Default::default(),
+            search: Default::default(),
         };
         this.resume(cx);
         this
@@ -297,6 +300,7 @@ impl Immagine {
         self.timeline_placed.set(false);
         self.albums = Default::default();
         self.people = Default::default();
+        self.search = Default::default();
         self.viewer = None;
         self.tab = 0;
         self.screen = Screen::Login;
@@ -382,6 +386,7 @@ impl Immagine {
         }
         let list = |h: &UniformListScrollHandle| h.0.borrow().base_handle.clone();
         Some(match self.tab {
+            0 if self.search.open => list(&self.search.scroll),
             0 => list(&self.timeline_scroll),
             1 => match self.albums.open_scroll() {
                 Some(scroll) => list(scroll),
@@ -403,6 +408,7 @@ impl Render for Immagine {
         let content = match self.screen {
             Screen::Loading => div().into_any_element(),
             Screen::Login => self.login_view(&p, cx).into_any_element(),
+            Screen::Timeline if self.tab == 0 && self.search.open => self.search_view(&p, window, cx),
             Screen::Timeline if self.tab == 0 => self.timeline_view(&p, window, cx).into_any_element(),
             Screen::Timeline if self.tab == 1 => self.albums_view(&p, window, cx),
             Screen::Timeline => self.people_view(&p, window, cx),

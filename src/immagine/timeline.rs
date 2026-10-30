@@ -2,7 +2,7 @@
 
 use super::{thumbs, Immagine};
 use crate::components::glass::glass_blur;
-use crate::theme::Palette;
+use crate::theme::{Palette, BLUE};
 use crate::logic::models::timeline::TimelineItem;
 use gpui_kit::*;
 use std::rc::Rc;
@@ -172,12 +172,28 @@ impl Immagine {
                             )
                             .child(
                                 div()
-                                    .id("logout")
-                                    .text_size(px(15.))
-                                    .text_color(p.secondary)
-                                    .active(|s| s.opacity(0.6))
-                                    .child("Abmelden")
-                                    .on_click(cx.listener(|this, _, _, cx| this.log_out(cx))),
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_4()
+                                    .child(
+                                        div()
+                                            .id("search-open")
+                                            .text_size(px(15.))
+                                            .text_color(rgb(BLUE))
+                                            .active(|s| s.opacity(0.6))
+                                            .child("Suchen")
+                                            .on_click(cx.listener(|this, _, window, cx| this.open_search(window, cx))),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("logout")
+                                            .text_size(px(15.))
+                                            .text_color(p.secondary)
+                                            .active(|s| s.opacity(0.6))
+                                            .child("Abmelden")
+                                            .on_click(cx.listener(|this, _, _, cx| this.log_out(cx))),
+                                    ),
                             ),
                     ),
             )
