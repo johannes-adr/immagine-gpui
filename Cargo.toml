@@ -26,7 +26,7 @@ web-sys = { version = "0.3", features = [
     "Location", "Storage", "console", "Performance", "ImageBitmap", "OffscreenCanvas",
     "OffscreenCanvasRenderingContext2d", "ImageData", "Blob", "PointerEvent", "MouseEvent", "Document", "HtmlElement",
     "CssStyleDeclaration", "Node", "Element", "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbTransaction", "IdbTransactionMode",
-    "IdbOpenDbRequest", "IdbRequest", "Url",
+    "IdbOpenDbRequest", "IdbRequest", "Url", "AbortController", "AbortSignal",
     "Navigator", "AudioContext", "AudioContextState", "AudioDestinationNode", "AudioNode", "AudioBuffer", "AudioBufferSourceNode", "BaseAudioContext",
 ] }
 

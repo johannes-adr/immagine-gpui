@@ -140,12 +140,12 @@ impl Host for Web {
         }
     }
 
-    async fn decode_bytes(bytes: Vec<u8>) -> Result<Decoded, String> {
-        image_loader::decode_bytes(&bytes).await
+    async fn decode_bytes(bytes: Vec<u8>, min_side: u32) -> Result<Decoded, String> {
+        image_loader::decode_bytes(&bytes, min_side).await
     }
 
-    async fn decode_url(url: &str) -> Result<Decoded, String> {
-        image_loader::decode_url(url).await
+    async fn fetch_image(url: &str, cancel: &crate::host::Cancel) -> Result<Vec<u8>, String> {
+        image_loader::fetch(url, cancel).await
     }
 
     async fn share_file(name: &str, mime: &str, bytes: Vec<u8>) -> Result<(), String> {

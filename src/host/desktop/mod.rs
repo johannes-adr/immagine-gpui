@@ -11,7 +11,7 @@ pub mod entry;
 mod http;
 mod store;
 
-use crate::host::{AppInfo, AudioConfig, AudioOutput, Chunk, Decoded, Host, Pinch, VideoConfig, VideoDecode};
+use crate::host::{AppInfo, Cancel, AudioConfig, AudioOutput, Chunk, Decoded, Host, Pinch, VideoConfig, VideoDecode};
 use crate::logic::ports::Clock;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -134,22 +134,32 @@ impl Host for Desktop {
         .await
     }
 
-    async fn decode_bytes(bytes: Vec<u8>) -> Result<Decoded, String> {
+    async fn decode_bytes(bytes: Vec<u8>, min_side: u32) -> Result<Decoded, String> {
         blocking::run(move || {
-            let image = image::load_from_memory(&bytes).map_err(|e| e.to_string())?.into_rgba8();
+            let mut image = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+            let short = image.width().min(image.height());
+            if min_side > 0 && short > min_side {
+                let k = min_side as f64 / short as f64;
+                let (w, h) = (((image.width() as f64 * k).round() as u32).max(1), ((image.height() as f64 * k).round() as u32).max(1));
+                image = image.resize_exact(w, h, image::imageops::FilterType::Triangle);
+            }
+            let image = image.into_rgba8();
             Ok(Decoded { width: image.width(), height: image.height(), rgba: image.into_raw() })
         })
         .await
     }
 
-    async fn decode_url(url: &str) -> Result<Decoded, String> {
+    /// `ureq` cannot be interrupted: a cancelled download still runs to the end, its bytes are dropped.
+    async fn fetch_image(url: &str, cancel: &Cancel) -> Result<Vec<u8>, String> {
+        if cancel.is_cancelled() {
+            return Err("cancelled".into());
+        }
         let url = url.to_string();
-        blocking::run(move || {
-            let bytes = http::get_bytes(&url)?;
-            let image = image::load_from_memory(&bytes).map_err(|e| e.to_string())?.into_rgba8();
-            Ok(Decoded { width: image.width(), height: image.height(), rgba: image.into_raw() })
-        })
-        .await
+        let bytes = blocking::run(move || http::get_bytes(&url)).await?;
+        if cancel.is_cancelled() {
+            return Err("cancelled".into());
+        }
+        Ok(bytes)
     }
 
     async fn share_file(_name: &str, _mime: &str, _bytes: Vec<u8>) -> Result<(), String> {

@@ -156,7 +156,7 @@ impl Immagine {
         let loaded = thumbs::get(
             &self.thumbs,
             &format!("t:{}", cover.asset_id),
-            || format!("{}/api/assets/{}/thumbnail?size=thumbnail", self.origin, cover.asset_id),
+            || thumbs::thumb_url(&self.origin, &cover.asset_id, "thumbnail", cover.thumbhash.as_deref()),
             cx,
         );
         loaded.or_else(|| cover.thumbhash.as_deref().and_then(|hash| thumbs::placeholder(&self.thumbs, &cover.asset_id, hash)))

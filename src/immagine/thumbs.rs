@@ -1,19 +1,34 @@
 //! Image store for grid thumbnails and viewer previews.
 //!
 //! GPUI's own `img(url)` decodes in WASM on the UI thread and keeps every decoded image forever. This store
-//! loads through the browser's decoder (`Host::decode_url`), keeps decoded images in a byte-bounded
-//! LRU, runs at most `MAX_ACTIVE` loads at once, and drops requests for tiles that scrolled away before their
-//! turn. Images are `RenderImage`s (BGRA) that GPUI paints through `img(Arc<RenderImage>)`.
+//! loads through the browser's decoder (`Host::fetch_image` + `Host::decode_bytes`, scaled to the cell size), keeps
+//! decoded images in a byte-bounded LRU, runs at most `MAX_ACTIVE` loads at once, drops requests for tiles that
+//! scrolled away before their turn, aborts running grid thumbnail loads that scrolled away, holds back new loads
+//! during a fast fling, and keeps the encoded thumbnails in a persistent cache (`THUMB_CACHE_DB`). Images are
+//! `RenderImage`s (BGRA) that GPUI paints through `img(Arc<RenderImage>)`.
 
 use super::{downloads::DOWNLOAD_DB, Immagine};
 use crate::logic::thumbhash;
-use crate::host::{Current as H, Decoded, Host};
+use crate::host::{Cancel, Current as H, Decoded, Host};
 use gpui_kit::*;
 use image::{Frame, RgbaImage};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Encoded `t:` thumbnails (WebP, a few KB each) persisted across launches, key `t:<id>:<thumbhash>`.
+pub(crate) const THUMB_CACHE_DB: &str = "thumb-cache";
+/// Entries kept in `THUMB_CACHE_DB`; beyond it the oldest inserted are deleted.
+const CACHE_CAP: usize = 40_000;
+/// Scroll speed (points per ms) above which no new loads start, and how fresh the speed sample must be.
+const FLING_SPEED: f32 = 3.;
+const FLING_FRESH_MS: f64 = 100.;
+/// A held store wakes up again after this long to start the loads of the tiles that stayed visible.
+const WAKE_MS: u64 = 150;
+/// A gap between scroll samples longer than this was a pause, not a speed.
+const SAMPLE_GAP_MS: f64 = 100.;
 
 const MAX_ACTIVE: usize = 6;
 /// Decoded pixels kept in memory (RGBA = 4 bytes per pixel).
@@ -28,18 +43,88 @@ struct Entry {
     image: Arc<RenderImage>,
     stamp: u64,
     bytes: usize,
+    /// Short side this was decoded for (0 = full size).
+    side: u32,
 }
 
 struct Job {
     key: String,
     url: String,
+    /// Wanted short side (0 = full size).
+    side: u32,
     frame: u64,
     seq: u64,
 }
 
+/// A load in flight: its cancel token and the last frame something asked for it.
+struct Running {
+    cancel: Cancel,
+    frame: u64,
+}
+
+/// Keys of `THUMB_CACHE_DB`, kept in memory so a miss never touches IndexedDB. `known` holds the names as
+/// `norm` maps them (the desktop store turns `:` into `_`), `order` the keys as the store knows them, oldest first.
+#[derive(Default)]
+struct CacheIndex {
+    known: HashSet<String>,
+    order: VecDeque<String>,
+}
+
+fn norm(key: &str) -> String {
+    key.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect()
+}
+
+/// An entry decoded for `have` serves a request for `want` (0 = full size) if it is at least that big.
+fn enough(have: u32, want: u32) -> bool {
+    have == 0 || (want != 0 && have >= want)
+}
+
+/// The bigger of two wanted sides (0 = full size is the biggest).
+fn bigger(a: u32, b: u32) -> u32 {
+    if a == 0 || b == 0 { 0 } else { a.max(b) }
+}
+
+/// Decode size for a tile of `cell` points: its pixel size rounded up to a bucket, so a pinch does not ask for a
+/// new size every frame. Above the biggest bucket (the server thumbnail is ~250 px) the full image.
+pub(super) fn side_for(cell: f32, scale: f32) -> u32 {
+    let px = (cell * scale).ceil().max(1.) as u32;
+    [64, 96, 128, 192].into_iter().find(|b| px <= *b).unwrap_or(0)
+}
+
+fn encode_component(text: &str) -> String {
+    let mut out = String::new();
+    for b in text.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// `{origin}/api/assets/{id}/thumbnail?size={size}&c={thumbhash}`: the hash is the cache key of the response (an
+/// edit changes it), left out when the asset has none.
+pub(super) fn thumb_url(origin: &str, id: &str, size: &str, hash: Option<&str>) -> String {
+    let mut url = format!("{origin}/api/assets/{id}/thumbnail?size={size}");
+    if let Some(hash) = hash.filter(|h| !h.is_empty()) {
+        url.push_str("&c=");
+        url.push_str(&encode_component(hash));
+    }
+    url
+}
+
+/// Persistent-cache key of a grid thumbnail load: `t:<id>:<encoded thumbhash>`; `None` for other renditions.
+fn cache_key(key: &str, url: &str) -> Option<String> {
+    key.starts_with("t:").then(|| {
+        let hash = url.split_once("&c=").map_or("", |(_, h)| h.split('&').next().unwrap_or(""));
+        format!("{key}:{hash}")
+    })
+}
+
 pub(super) struct Thumbs {
     images: HashMap<String, Entry>,
-    pending: HashSet<String>,
+    running: HashMap<String, Running>,
     queue: Vec<Job>,
     /// Keys whose load failed: the frame it happened in and how often. They are retried a few times.
     failed: HashMap<String, (u64, u8)>,
@@ -51,6 +136,12 @@ pub(super) struct Thumbs {
     view: WeakEntity<Immagine>,
     /// Assets kept in IndexedDB (shared with `Downloads`): their renditions are read from there before the network.
     local: Rc<RefCell<HashSet<String>>>,
+    cache: CacheIndex,
+    /// Last scroll sample (offset, time) and the speed measured from the last two.
+    scroll: Option<(f32, f64)>,
+    speed: f32,
+    speed_at: f64,
+    wake_pending: bool,
 }
 
 pub(super) type SharedThumbs = Rc<RefCell<Thumbs>>;
@@ -58,7 +149,7 @@ pub(super) type SharedThumbs = Rc<RefCell<Thumbs>>;
 pub(super) fn new(view: WeakEntity<Immagine>, local: Rc<RefCell<HashSet<String>>>) -> SharedThumbs {
     Rc::new(RefCell::new(Thumbs {
         images: HashMap::new(),
-        pending: HashSet::new(),
+        running: HashMap::new(),
         queue: Vec::new(),
         failed: HashMap::new(),
         evicted: Vec::new(),
@@ -68,6 +159,11 @@ pub(super) fn new(view: WeakEntity<Immagine>, local: Rc<RefCell<HashSet<String>>
         bytes: 0,
         view,
         local,
+        cache: CacheIndex::default(),
+        scroll: None,
+        speed: 0.,
+        speed_at: f64::MIN,
+        wake_pending: false,
     }))
 }
 
@@ -75,6 +171,32 @@ impl Thumbs {
     /// Called once per render pass that asks for images; visible entries are re-stamped, scrolled-off ones age.
     pub(super) fn begin_frame(&mut self) {
         self.frame += 1;
+        // Grid thumbnails nobody asks for any more are aborted; previews and full sizes run to the end.
+        for (key, r) in &self.running {
+            if key.starts_with("t:") && r.frame + STALE_FRAMES < self.frame {
+                r.cancel.cancel();
+            }
+        }
+    }
+
+    /// Reports the grid's scroll offset (once per frame). Fast movement holds back new loads (`held`).
+    pub(super) fn track_scroll(&mut self, offset: f32) {
+        let now = H::now_ms();
+        let Some((prev, at)) = self.scroll else {
+            self.scroll = Some((offset, now));
+            return;
+        };
+        let dt = now - at;
+        if dt < 1. {
+            return;
+        }
+        self.speed = if dt > SAMPLE_GAP_MS { 0. } else { (offset - prev).abs() / dt as f32 };
+        self.speed_at = now;
+        self.scroll = Some((offset, now));
+    }
+
+    fn held(&self) -> bool {
+        self.speed > FLING_SPEED && H::now_ms() - self.speed_at < FLING_FRESH_MS
     }
 
     /// Images evicted since the last call; the caller frees their atlas tiles with `Window::drop_image`.
@@ -92,10 +214,16 @@ impl Thumbs {
         }
     }
 
-    fn insert(&mut self, key: String, image: Arc<RenderImage>, bytes: usize) {
+    fn fail(&mut self, key: &str) {
+        let frame = self.frame;
+        let tries = self.failed.get(key).map_or(0, |f| f.1) + 1;
+        self.failed.insert(key.to_string(), (frame, tries));
+    }
+
+    fn insert(&mut self, key: String, image: Arc<RenderImage>, bytes: usize, side: u32) {
         self.bytes += bytes;
         let stamp = self.frame;
-        if let Some(old) = self.images.insert(key, Entry { image, stamp, bytes }) {
+        if let Some(old) = self.images.insert(key, Entry { image, stamp, bytes, side }) {
             self.bytes -= old.bytes;
             self.evicted.push(old.image);
         }
@@ -130,34 +258,68 @@ pub(super) fn peek(store: &SharedThumbs, key: &str) -> Option<Arc<RenderImage>> 
     Some(entry.image.clone())
 }
 
-/// The decoded image for `key`, or `None` while it loads (the request is queued here).
+/// The decoded image for `key` at full size, or `None` while it loads (the request is queued here).
 pub(super) fn get(store: &SharedThumbs, key: &str, url: impl FnOnce() -> String, cx: &mut App) -> Option<Arc<RenderImage>> {
-    {
+    get_sized(store, key, 0, url, cx)
+}
+
+/// Like `get`, decoded with the short side at least `min_side` (see `side_for`; 0 = full size). A smaller entry
+/// is returned meanwhile (drawn upscaled) while the bigger one loads. During a fast fling nothing new is queued.
+pub(super) fn get_sized(store: &SharedThumbs, key: &str, min_side: u32, url: impl FnOnce() -> String, cx: &mut App) -> Option<Arc<RenderImage>> {
+    let have = {
         let mut s = store.borrow_mut();
         let frame = s.frame;
-        if let Some(entry) = s.images.get_mut(key) {
+        let have = s.images.get_mut(key).map(|entry| {
             entry.stamp = frame;
-            return Some(entry.image.clone());
+            (entry.image.clone(), entry.side)
+        });
+        if let Some((image, side)) = &have {
+            if enough(*side, min_side) {
+                return Some(image.clone());
+            }
         }
-        if s.pending.contains(key) {
-            return None;
+        let have = have.map(|(image, _)| image);
+        if let Some(r) = s.running.get_mut(key) {
+            r.frame = frame;
+            return have;
         }
         if let Some(&(at, tries)) = s.failed.get(key) {
             // A failed load (network hiccup, decoder busy) is tried again a little later, a few times.
             if tries >= MAX_TRIES || frame < at + RETRY_FRAMES {
-                return None;
+                return have;
             }
         }
         if let Some(job) = s.queue.iter_mut().find(|j| j.key == key) {
             job.frame = frame;
+            job.side = bigger(job.side, min_side);
+        } else if s.held() {
+            let wake = !std::mem::replace(&mut s.wake_pending, true);
+            drop(s);
+            if wake {
+                schedule_wake(store, cx);
+            }
+            return have;
         } else {
             s.seq += 1;
-            let job = Job { key: key.to_string(), url: url(), frame, seq: s.seq };
+            let job = Job { key: key.to_string(), url: url(), side: min_side, frame, seq: s.seq };
             s.queue.push(job);
         }
-    }
+        have
+    };
     pump(store, cx);
-    None
+    have
+}
+
+/// Notifies the view after a moment, so the loads held back during a fling start once it slowed down.
+fn schedule_wake(store: &SharedThumbs, cx: &mut App) {
+    let store = store.clone();
+    let view = store.borrow().view.clone();
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(Duration::from_millis(WAKE_MS)).await;
+        store.borrow_mut().wake_pending = false;
+        view.update(cx, |_, cx| cx.notify()).ok();
+    })
+    .detach();
 }
 
 /// The tiny blurred stand-in for an asset, decoded from its thumbhash (cheap, cached like any image).
@@ -171,15 +333,24 @@ pub(super) fn placeholder(store: &SharedThumbs, id: &str, hash: &str) -> Option<
     }
     let (rgba, w, h) = thumbhash::decode(hash)?;
     let image = render_image(w, h, rgba)?;
-    s.insert(key, image.clone(), (w * h * 4) as usize);
+    s.insert(key, image.clone(), (w * h * 4) as usize, 0);
     Some(image)
 }
 
 fn pump(store: &SharedThumbs, cx: &mut App) {
     loop {
-        let job = {
+        let (job, cancel) = {
             let mut s = store.borrow_mut();
             if s.active >= MAX_ACTIVE {
+                return;
+            }
+            if s.held() {
+                // Queued jobs wait for the fling to slow; if it stops dead no frame would start them otherwise.
+                let wake = !s.queue.is_empty() && !std::mem::replace(&mut s.wake_pending, true);
+                drop(s);
+                if wake {
+                    schedule_wake(store, cx);
+                }
                 return;
             }
             let frame = s.frame;
@@ -188,9 +359,10 @@ fn pump(store: &SharedThumbs, cx: &mut App) {
             let next = s.queue.iter().enumerate().max_by_key(|(_, j)| (j.frame, std::cmp::Reverse(j.seq))).map(|(i, _)| i);
             let Some(index) = next else { return };
             let job = s.queue.swap_remove(index);
-            s.pending.insert(job.key.clone());
+            let cancel = Cancel::new();
+            s.running.insert(job.key.clone(), Running { cancel: cancel.clone(), frame: job.frame });
             s.active += 1;
-            job
+            (job, cancel)
         };
         let store = store.clone();
         // Key `t:<id>` / `p:<id>` / `f:<id>`: a downloaded asset has its thumbnail and preview stored under the same
@@ -199,39 +371,122 @@ fn pump(store: &SharedThumbs, cx: &mut App) {
             let blob = if kind == "f" { id.to_string() } else { job.key.clone() };
             blob
         });
+        let cached = cache_key(&job.key, &job.url).filter(|k| store.borrow().cache.known.contains(&norm(k)));
+        let put_key = cache_key(&job.key, &job.url);
         cx.spawn(async move |cx| {
-            let stored = match local {
-                Some(blob) => match H::blob_get(DOWNLOAD_DB, &blob).await {
-                    Ok(Some(bytes)) if !bytes.is_empty() => H::decode_bytes(bytes).await.ok(),
-                    _ => None,
-                },
-                None => None,
+            let result = load(&store, &job, local, cached, &cancel).await;
+            let (result, fresh) = match result {
+                Ok((decoded, fresh)) => (Ok(decoded), fresh),
+                Err(e) => (Err(e), None),
             };
-            let result = match stored {
-                Some(decoded) => Ok(decoded),
-                None => H::decode_url(&job.url).await,
-            };
-            let _ = cx.update(|app| finish(&store, job.key, result, app));
+            let _ = cx.update(|app| finish(&store, &job.key, job.side, result, &cancel, app));
+            // Fire and forget: the next launch finds the thumbnail without the network.
+            if let (Some(key), Some(bytes)) = (put_key, fresh) {
+                cache_put(&store, key, bytes).await;
+            }
         })
         .detach();
     }
 }
 
-fn finish(store: &SharedThumbs, key: String, result: Result<Decoded, String>, cx: &mut App) {
+/// Where the pixels come from: a stored download, the persistent thumbnail cache, then the network. The last one
+/// also hands back the encoded bytes (only for cacheable thumbnails) so the caller can persist them.
+async fn load(
+    store: &SharedThumbs,
+    job: &Job,
+    local: Option<String>,
+    cached: Option<String>,
+    cancel: &Cancel,
+) -> Result<(Decoded, Option<Vec<u8>>), String> {
+    if let Some(blob) = local {
+        if let Ok(Some(bytes)) = H::blob_get(DOWNLOAD_DB, &blob).await {
+            if !bytes.is_empty() {
+                if let Ok(decoded) = H::decode_bytes(bytes, job.side).await {
+                    return Ok((decoded, None));
+                }
+            }
+        }
+    }
+    if let Some(key) = cached {
+        match H::blob_get(THUMB_CACHE_DB, &key).await {
+            Ok(Some(bytes)) if !bytes.is_empty() => {
+                if let Ok(decoded) = H::decode_bytes(bytes, job.side).await {
+                    return Ok((decoded, None));
+                }
+            }
+            _ => {}
+        }
+        // Gone or unreadable: forget it and fetch again.
+        store.borrow_mut().cache.known.remove(&norm(&key));
+    }
+    let bytes = H::fetch_image(&job.url, cancel).await?;
+    if cancel.is_cancelled() {
+        return Err("cancelled".into());
+    }
+    let keep = cache_key(&job.key, &job.url).map(|_| bytes.clone());
+    let decoded = H::decode_bytes(bytes, job.side).await?;
+    Ok((decoded, keep))
+}
+
+/// Persists an encoded thumbnail and trims the cache to `CACHE_CAP` entries, oldest inserted first.
+async fn cache_put(store: &SharedThumbs, key: String, bytes: Vec<u8>) {
+    if H::blob_put(THUMB_CACHE_DB, &key, &bytes).await.is_err() {
+        return;
+    }
+    let evict: Vec<String> = {
+        let mut s = store.borrow_mut();
+        if s.cache.known.insert(norm(&key)) {
+            s.cache.order.push_back(key);
+        }
+        let mut evict = Vec::new();
+        while s.cache.known.len() > CACHE_CAP {
+            let Some(old) = s.cache.order.pop_front() else { break };
+            s.cache.known.remove(&norm(&old));
+            evict.push(old);
+        }
+        evict
+    };
+    for old in evict {
+        let _ = H::blob_delete(THUMB_CACHE_DB, &old).await;
+    }
+}
+
+/// Reads which thumbnails the persistent cache holds; called once at start (until then every load goes to the network).
+pub(super) fn init_cache(store: &SharedThumbs, cx: &mut App) {
+    let store = store.clone();
+    cx.spawn(async move |_| {
+        let keys = H::blob_keys(THUMB_CACHE_DB).await.unwrap_or_default();
+        let mut s = store.borrow_mut();
+        for key in keys {
+            if s.cache.known.insert(norm(&key)) {
+                s.cache.order.push_back(key);
+            }
+        }
+    })
+    .detach();
+}
+
+/// Forgets the cached keys (logout; the caller clears the db itself).
+pub(super) fn clear_cache(store: &SharedThumbs) {
+    store.borrow_mut().cache = CacheIndex::default();
+}
+
+fn finish(store: &SharedThumbs, key: &str, side: u32, result: Result<Decoded, String>, cancel: &Cancel, cx: &mut App) {
     let view = {
         let mut s = store.borrow_mut();
         s.active -= 1;
-        s.pending.remove(&key);
-        match result.ok().and_then(|d| render_image(d.width, d.height, d.rgba).map(|i| (i, (d.width * d.height * 4) as usize))) {
-            Some((image, bytes)) => {
-                s.failed.remove(&key);
-                s.insert(key, image, bytes)
-            }
-            None => {
-                let frame = s.frame;
-                let tries = s.failed.get(&key).map_or(0, |f| f.1) + 1;
-                s.failed.insert(key, (frame, tries));
-            }
+        s.running.remove(key);
+        match result {
+            Ok(d) => match render_image(d.width, d.height, d.rgba) {
+                Some(image) => {
+                    s.failed.remove(key);
+                    s.insert(key.to_string(), image, (d.width * d.height * 4) as usize, side)
+                }
+                None => s.fail(key),
+            },
+            // An aborted load is not a failure: the tile is simply asked for again if it comes back.
+            Err(_) if cancel.is_cancelled() => {}
+            Err(_) => s.fail(key),
         }
         s.view.clone()
     };

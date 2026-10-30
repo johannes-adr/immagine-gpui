@@ -240,6 +240,8 @@ impl Immagine {
         // adds up to many rows between where the zoom puts the anchor and where the list draws it (the grid jumped
         // back and forth while pinching near the end of a long timeline).
         let scale = window.scale_factor();
+        let side = thumbs::side_for(cell, scale);
+        let zooming = self.grid_zooming();
         let cell = if cols_f.fract() == 0. { cell.floor() } else { (cell * scale).floor() / scale };
         let fade = if timeline { self.grid_fade } else { 1. };
         let visible = self.visible.clone();
@@ -275,6 +277,11 @@ impl Immagine {
                 visible.set((first * columns, ((last + 1) * columns).min(items.len()).saturating_sub(1)));
             }
             store.borrow_mut().begin_frame();
+            if !zooming {
+                // A fast fling holds back new thumbnail loads (the pinch moves the offset too, so it does not count).
+                let offset: f32 = list_scroll.offset().y.into();
+                store.borrow_mut().track_scroll(offset);
+            }
             for evicted in store.borrow_mut().take_evicted() {
                 let _ = window.drop_image(evicted);
             }
@@ -291,7 +298,7 @@ impl Immagine {
                         let scroll = list_scroll.clone();
                         let all = items.clone();
                         let key = format!("t:{}", item.id);
-                        let loaded = thumbs::get(&store, &key, || format!("{origin}/api/assets/{}/thumbnail?size=thumbnail", item.id), cx);
+                        let loaded = thumbs::get_sized(&store, &key, side, || thumbs::thumb_url(&origin, &item.id, "thumbnail", item.thumbhash.as_deref()), cx);
                         let hidden = hidden_id.as_deref() == Some(item.id.as_str());
                         let picture = match (loaded, item.thumbhash.as_deref()) {
                             (Some(image), _) => Some(image),

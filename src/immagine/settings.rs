@@ -1,19 +1,42 @@
 //! Settings sheet, opened by the gear at the top right of Sammlungen: what the app stores and how it runs.
 
-use super::{downloads::DOWNLOAD_DB, video_player::DISK_DB, Immagine, DB};
+use super::{downloads::DOWNLOAD_DB, thumbs::{self, THUMB_CACHE_DB}, video_player::DISK_DB, Immagine, DB};
 use crate::components::sheet::{self, Sheet};
 use crate::host::{AppInfo, Current as H, Host, Pinch};
-use crate::theme::Palette;
+use crate::theme::{Palette, BLUE};
 use gpui_kit::*;
 
 #[derive(Default)]
 pub(super) struct SettingsState {
     pub(super) sheet: Sheet,
-    /// Bytes in the store snapshot db and in the video cache db; `None` until measured.
-    store_bytes: Option<u64>,
-    video_bytes: Option<u64>,
-    download_bytes: Option<u64>,
+    /// Per-category usage; `None` until measured.
+    store: Option<Usage>,
+    video: Option<Usage>,
+    thumbs: Option<Usage>,
+    downloads: Option<Usage>,
+    /// Downloads: bare keys (originals/videos), `t:` thumbnails, `p:` previews.
+    dl_parts: Option<(usize, usize, usize)>,
     info: Option<AppInfo>,
+}
+
+/// Entry count and bytes of one blob db.
+#[derive(Clone, Copy)]
+struct Usage {
+    count: usize,
+    bytes: u64,
+}
+
+async fn usage(db: &str) -> (Option<Usage>, Vec<String>) {
+    let keys = H::blob_keys(db).await.unwrap_or_default();
+    let bytes = H::blob_size(db).await.ok();
+    (bytes.map(|bytes| Usage { count: keys.len(), bytes }), keys)
+}
+
+fn usage_text(u: Option<Usage>) -> String {
+    match u {
+        None => "…".into(),
+        Some(u) => format!("{} · {}", u.count, size(u.bytes)),
+    }
 }
 
 /// 1 536 -> "1,5 KB".
@@ -60,15 +83,35 @@ impl Immagine {
         self.settings.sheet.open();
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let store = H::blob_size(DB).await.ok();
-            let video = H::blob_size(DISK_DB).await.ok();
-            let downloads = H::blob_size(DOWNLOAD_DB).await.ok();
+            let (store, _) = usage(DB).await;
+            let (video, _) = usage(DISK_DB).await;
+            let (thumbs, _) = usage(THUMB_CACHE_DB).await;
+            let (downloads, keys) = usage(DOWNLOAD_DB).await;
+            let thumb_n = keys.iter().filter(|k| k.starts_with("t:")).count();
+            let preview_n = keys.iter().filter(|k| k.starts_with("p:")).count();
+            let bare_n = keys.iter().filter(|k| !k.contains(':')).count();
             let info = H::app_info().await;
             let _ = this.update(cx, |t, cx| {
-                t.settings.store_bytes = store;
-                t.settings.video_bytes = video;
-                t.settings.download_bytes = downloads;
+                t.settings.store = store;
+                t.settings.video = video;
+                t.settings.thumbs = thumbs;
+                t.settings.downloads = downloads;
+                t.settings.dl_parts = Some((bare_n, thumb_n, preview_n));
                 t.settings.info = Some(info);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Empties the rebuildable thumbnail cache and re-measures it.
+    fn clear_thumb_cache(&mut self, cx: &mut Context<Self>) {
+        thumbs::clear_cache(&self.thumbs);
+        cx.spawn(async move |this, cx| {
+            let _ = H::blob_clear(THUMB_CACHE_DB).await;
+            let (thumbs, _) = usage(THUMB_CACHE_DB).await;
+            let _ = this.update(cx, |t, cx| {
+                t.settings.thumbs = thumbs;
                 cx.notify();
             });
         })
@@ -122,9 +165,30 @@ impl Immagine {
                     },
                     true,
                 ),
-                row(p, "Mediathek (IndexedDB)", st.store_bytes.map(size).unwrap_or_else(unknown), false),
-                row(p, "Video-Cache (IndexedDB)", st.video_bytes.map(size).unwrap_or_else(unknown), false),
-                row(p, "Downloads (IndexedDB)", st.download_bytes.map(size).unwrap_or_else(unknown), false),
+                row(p, "Mediathek (Sync-Stand)", usage_text(st.store), false),
+                // Counted in assets (bare keys); the bytes include their stored thumbnails and previews.
+                row(p, "Downloads", usage_text(st.downloads.map(|u| Usage { count: st.dl_parts.map_or(u.count, |d| d.0), ..u })), false),
+                row(
+                    p,
+                    "  davon Vorschaubilder",
+                    st.dl_parts.map_or_else(unknown, |(_, t, pr)| format!("{t} Thumbnails · {pr} Vorschauen")),
+                    false,
+                ),
+                row(p, "Thumbnail-Cache", usage_text(st.thumbs), false),
+                div().border_t_1().border_color(p.separator).child(
+                    div()
+                    .id("settings-clear-thumbs")
+                    .min_h(px(48.))
+                    .px_4()
+                    .flex()
+                    .items_center()
+                    .text_size(px(17.))
+                    .text_color(rgb(BLUE))
+                    .active(|s| s.opacity(0.6))
+                    .child("Thumbnail-Cache leeren")
+                    .on_click(cx.listener(|this, _, _, cx| this.clear_thumb_cache(cx))),
+                ),
+                row(p, "Video-Cache", usage_text(st.video), false),
             ],
         );
         let app = group(

@@ -258,6 +258,7 @@ impl Immagine {
         this.resume(cx);
         this.ensure_gestures(cx);
         this.load_downloads(cx);
+        thumbs::init_cache(&this.thumbs, cx);
         this
     }
 
@@ -380,8 +381,10 @@ impl Immagine {
         self.screen = Screen::Login;
         self.downloads.ids.borrow_mut().clear();
         self.downloads.busy.clear();
+        thumbs::clear_cache(&self.thumbs);
         cx.spawn(async move |_, _| {
             let _ = H::blob_clear(downloads::DOWNLOAD_DB).await;
+            let _ = H::blob_clear(thumbs::THUMB_CACHE_DB).await;
             let _ = H::blob_put(DB, SNAPSHOT_KEY, b"").await;
         })
         .detach();

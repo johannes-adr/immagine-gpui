@@ -25,10 +25,13 @@ fn card(
     store: &thumbs::SharedThumbs,
     origin: &str,
     placeholder: Rgba,
+    scale: f32,
     cx: &mut App,
 ) -> Stateful<Div> {
     let key = format!("t:{}", item.id);
-    let loaded = thumbs::get(store, &key, || format!("{origin}/api/assets/{}/thumbnail?size=thumbnail", item.id), cx);
+    // Cover fit: the short side of the picture needs about the longer side of the card. Full width cards: full size.
+    let side = w.map_or(0, |w| thumbs::side_for(w.max(h), scale));
+    let loaded = thumbs::get_sized(store, &key, side, || thumbs::thumb_url(origin, &item.id, "thumbnail", item.thumbhash.as_deref()), cx);
     let picture = match (loaded, item.thumbhash.as_deref()) {
         (Some(image), _) => Some(image),
         (None, Some(hash)) => thumbs::placeholder(store, &item.id, hash),
@@ -74,6 +77,7 @@ impl Immagine {
     /// Jahre: one card per year, tapping it opens Monate at that year.
     pub(super) fn years_view(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let vw: f32 = window.viewport_size().width.into();
+        let scale = window.scale_factor();
         let groups = self.range_groups();
         let card_h = ((vw - 2. * SIDE) * 0.62).round();
         let (store, origin, items, view) = (self.thumbs.clone(), self.origin.clone(), self.items.clone(), cx.weak_entity());
@@ -84,7 +88,7 @@ impl Immagine {
             let year = &groups.years[row];
             let view = view.clone();
             let first_month = year.first_month;
-            let c = card(("year", row), &items[year.cover], year.year.to_string(), (None, card_h), 30., &store, &origin, placeholder, cx).on_click(
+            let c = card(("year", row), &items[year.cover], year.year.to_string(), (None, card_h), 30., &store, &origin, placeholder, scale, cx).on_click(
                 move |_, window, cx| {
                     if window.tap_caught_fling() {
                         return;
@@ -99,6 +103,7 @@ impl Immagine {
     /// Monate: heading, the busiest day as a big card, up to three more days as small cards.
     pub(super) fn months_view(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let vw: f32 = window.viewport_size().width.into();
+        let scale = window.scale_factor();
         let groups = self.range_groups();
         let inner = vw - 2. * SIDE;
         let big_h = (inner * 0.66).round();
@@ -115,7 +120,7 @@ impl Immagine {
                 let view = view.clone();
                 let first = day.first;
                 let (size, text) = if i == 0 { ((None, big_h), 30.) } else { ((Some(small), small), 22.) };
-                let c = card(("day", row * 8 + i), &items[first], day.day.to_string(), size, text, &store, &origin, placeholder, cx);
+                let c = card(("day", row * 8 + i), &items[first], day.day.to_string(), size, text, &store, &origin, placeholder, scale, cx);
                 c.on_click(move |_, window, cx| {
                     if window.tap_caught_fling() {
                         return;

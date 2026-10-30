@@ -920,7 +920,7 @@ impl Immagine {
         let (ix, iy, iw, ih) = fit(area, ar);
         ed.area.set((ix, iy, iw, ih));
         let (id, origin) = (item.id.clone(), self.origin.clone());
-        let image = thumbs::get(&self.thumbs, &format!("p:{id}"), || format!("{origin}/api/assets/{id}/thumbnail?size=preview"), cx)
+        let image = thumbs::get(&self.thumbs, &format!("p:{id}"), || thumbs::thumb_url(&origin, &id, "preview", item.thumbhash.as_deref()), cx)
             .or_else(|| thumbs::peek(&self.thumbs, &format!("t:{id}")));
         let r = ed.rect;
         let (l, t, w, h) = (ix + r.x as f32 * iw, iy + r.y as f32 * ih, r.width as f32 * iw, r.height as f32 * ih);
@@ -1073,7 +1073,7 @@ impl Immagine {
         let near = if zoom > 1. { index..=index } else { index.saturating_sub(1)..=(index + 1).min(count.saturating_sub(1)) };
         for k in near {
             let Some(item) = items.get(k) else { continue };
-            let url = |size: &str| format!("{origin}/api/assets/{}/thumbnail?size={size}", item.id);
+            let url = |size: &str| thumbs::thumb_url(&origin, &item.id, size, item.thumbhash.as_deref());
             // While the photos slide into place only what is decoded already is used: a decode now would drop frames.
             let (tk, pk, fk) = (format!("t:{}", item.id), format!("p:{}", item.id), format!("f:{}", item.id));
             let thumb = if snapping { thumbs::peek(&store, &tk) } else { thumbs::get(&store, &tk, || url("thumbnail"), cx) };
@@ -1131,7 +1131,7 @@ impl Immagine {
                 .filter_map(|j| {
                     let item = items.get(j)?;
                     let key = format!("t:{}", item.id);
-                    let image = if snapping { thumbs::peek(&store, &key) } else { thumbs::get(&store, &key, || format!("{origin}/api/assets/{}/thumbnail?size=thumbnail", item.id), cx) };
+                    let image = if snapping { thumbs::peek(&store, &key) } else { thumbs::get(&store, &key, || thumbs::thumb_url(&origin, &item.id, "thumbnail", item.thumbhash.as_deref()), cx) };
                     let w = lerp(22., 38., (1. - (j as f32 - pos).abs()).max(0.));
                     let tile = (j, left, w, image);
                     left += w + 2.;

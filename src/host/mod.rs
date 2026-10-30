@@ -10,6 +10,8 @@
 //! Dispatch is static (`Current` is selected by `cfg`), so the traits can use `async fn` and need no `Send`.
 
 use crate::logic::ports::{Clock, HttpTransport};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 #[cfg(target_family = "wasm")]
 pub mod web;
@@ -29,6 +31,46 @@ pub struct Decoded {
 }
 
 pub use crate::logic::movie::Chunk;
+
+/// Cancels a load that is no longer wanted (a thumbnail whose tile scrolled away). Clones share the state; main
+/// thread only, like everything that touches the platform handles.
+#[derive(Clone, Default)]
+pub struct Cancel(Rc<CancelState>);
+
+#[derive(Default)]
+struct CancelState {
+    done: Cell<bool>,
+    hooks: RefCell<Vec<Box<dyn FnOnce()>>>,
+}
+
+impl Cancel {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Cancels once; runs the registered hooks (web: `AbortController.abort()`).
+    pub fn cancel(&self) {
+        if !self.0.done.replace(true) {
+            let hooks = std::mem::take(&mut *self.0.hooks.borrow_mut());
+            for hook in hooks {
+                hook();
+            }
+        }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.done.get()
+    }
+
+    /// Runs `hook` on cancel, or right away if already cancelled.
+    pub fn on_cancel(&self, hook: impl FnOnce() + 'static) {
+        if self.is_cancelled() {
+            hook();
+        } else {
+            self.0.hooks.borrow_mut().push(Box::new(hook));
+        }
+    }
+}
 
 /// What the settings sheet shows about the installation. Platforms without a notion of it return the defaults.
 #[derive(Clone, Debug, Default)]
@@ -162,11 +204,15 @@ pub trait Host: 'static {
     /// Installation details for the settings sheet.
     async fn app_info() -> AppInfo;
 
-    /// Decodes an image already in memory (a stored download).
-    async fn decode_bytes(bytes: Vec<u8>) -> Result<Decoded, String>;
+    /// Decodes an encoded image held in memory (stored download, cached thumbnail, fresh download). `min_side` 0 =
+    /// full size; otherwise the image is scaled so its SHORTER side is `min_side` (cover fit), never up. Web: the
+    /// browser decodes, then draws scaled into an `OffscreenCanvas`; desktop: `image` crate, Triangle filter.
+    async fn decode_bytes(bytes: Vec<u8>, min_side: u32) -> Result<Decoded, String>;
 
-    /// Downloads an image with the session's credentials and decodes it to pixels.
-    async fn decode_url(url: &str) -> Result<Decoded, String>;
+    /// Downloads an image (still encoded) with the session's credentials; `cancel` aborts it (an `Err`).
+    /// Web: aborts the `fetch`. Desktop: `ureq` cannot be interrupted, so the token is only checked before and
+    /// after the blocking download.
+    async fn fetch_image(url: &str, cancel: &Cancel) -> Result<Vec<u8>, String>;
 
     /// Downloads `url` with the session's credentials. Used for videos, which the app demuxes and plays itself.
     async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String>;

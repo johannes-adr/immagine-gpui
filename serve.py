@@ -24,6 +24,9 @@ IMMICH = urllib.parse.urlsplit(os.environ.get("IMMICH_URL", "http://immich.serve
 HOP = {"connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "proxy-authorization", "proxy-authenticate", "host"}
 
 class H(http.server.SimpleHTTPRequestHandler):
+    # Keep-alive: static files and proxied responses with a length carry Content-Length; the close-delimited
+    # proxy path sets close_connection itself.
+    protocol_version = "HTTP/1.1"
     extensions_map = {**http.server.SimpleHTTPRequestHandler.extensions_map, ".wasm": "application/wasm"}
 
     def proxy(self):
@@ -38,13 +41,24 @@ class H(http.server.SimpleHTTPRequestHandler):
             for k, v in r.getheaders():
                 if k.lower() not in HOP | {"content-length"}:
                     self.send_header(k, v)
-            # Close-delimited body: lets large originals/videos stream without buffering.
-            self.send_header("Connection", "close")
-            self.end_headers()
-            self.close_connection = True
-            while chunk := r.read(65536):
-                self.wfile.write(chunk)
+            length = r.getheader("Content-Length")
+            chunked = "chunked" in (r.getheader("Transfer-Encoding") or "").lower()
+            if length is not None and not chunked:
+                # Known length: forward it and keep the client connection alive (a grid fires hundreds of thumbnail requests).
+                self.send_header("Content-Length", length)
+                self.end_headers()
+                if self.command != "HEAD":
+                    while chunk := r.read(65536):
+                        self.wfile.write(chunk)
+            else:
+                # Close-delimited body: lets large originals/videos stream without buffering.
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.close_connection = True
+                while chunk := r.read(65536):
+                    self.wfile.write(chunk)
         except (OSError, http.client.HTTPException) as e:
+            self.close_connection = True
             if not self.wfile.closed:
                 try:
                     self.send_error(502, f"Immich proxy: {e}")
@@ -117,7 +131,10 @@ class H(http.server.SimpleHTTPRequestHandler):
         return super().send_head()
 
     def end_headers(self):
-        self.send_header("Cache-Control", "no-store")
+        # Static files are never cached in dev. Proxied /api/ responses keep Immich's own Cache-Control (thumbnails
+        # are cacheable for a day there), so the browser cache behaves like in production.
+        if not self.path.startswith("/api/"):
+            self.send_header("Cache-Control", "no-store")
         # Cross-origin isolation: SharedArrayBuffer, so the wasm threads (GPUI background executor) run.
         # COI=0 leaves it out: same build, GPUI falls back to one thread (for A/B comparisons).
         if COI:
