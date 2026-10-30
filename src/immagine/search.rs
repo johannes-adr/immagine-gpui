@@ -1,8 +1,10 @@
-//! Search: opened from the Mediathek header. Modelled on Immich's search page: a text field, "Kontext" (smart /
+//! Search: opened from the lupe of the range bar. Modelled on Immich's search page: a text field, "Kontext" (smart /
 //! CLIP search, `POST /search/smart`) or "Dateiname" (`POST /search/metadata` with `originalFileName`), and a
 //! media-type filter. Results are fetched on demand through `ImmichClient`, not stored, and shown in `photo_grid`.
 //! Smart search results keep the server's relevance order; filename results are newest first.
+//! The field lives in a glass bar at the bottom (Apple Photos look) that rides above the keyboard.
 
+use super::icons::{glyph, Glyph};
 use super::people::Load;
 use super::Immagine;
 use crate::components::glass::glass_div;
@@ -83,7 +85,7 @@ async fn run_query(origin: &str, token: &str, query: &str, mode: Mode, kind: Kin
 impl Immagine {
     pub(super) fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.search.input.is_none() {
-            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Suchen"));
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Mediathek durchsuchen …"));
             cx.subscribe_in(&input, window, |this, _, event: &InputEvent, _, cx| match event {
                 InputEvent::Change => this.search_typed(cx),
                 InputEvent::PressEnter { .. } => this.start_search(cx),
@@ -93,9 +95,7 @@ impl Immagine {
             self.search.input = Some(input);
         }
         self.search.open = true;
-        if let Some(input) = self.search.input.clone() {
-            input.update(cx, |state, cx| state.focus(window, cx));
-        }
+        self.focus_search(window, cx);
         cx.notify();
     }
 
@@ -103,6 +103,16 @@ impl Immagine {
         self.search.open = false;
         self.search.serial += 1;
         cx.notify();
+    }
+
+    /// Focuses the field and asks for the software keyboard. Called from tap handlers: browsers only show the
+    /// keyboard for a focus that happens inside a user gesture, and the web platform only recognizes a tap on the
+    /// text itself as a tap on a text input, not one on the glass pill around it or on the lupe that opened this.
+    fn focus_search(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(input) = self.search.input.clone() {
+            input.update(cx, |state, cx| state.focus(window, cx));
+            window.request_virtual_keyboard();
+        }
     }
 
     fn query(&self, cx: &App) -> String {
@@ -163,25 +173,24 @@ impl Immagine {
     pub(super) fn search_view(&mut self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let s = &self.search;
         let (hint, hint_color): (String, Rgba) = match &s.status {
-            Load::Idle => ("Suche nach Motiven, Orten oder Dateinamen.".into(), p.secondary),
+            Load::Idle => ("Nach Motiven, Orten oder Dateinamen suchen.".into(), p.secondary),
             Load::Loading => ("Suche …".into(), p.secondary),
             Load::Failed(e) => (e.clone(), rgb(RED).into()),
             Load::Done if s.items.is_empty() => ("Keine Ergebnisse".into(), p.secondary),
             Load::Done => (format!("{} Ergebnisse", s.items.len()), p.secondary),
         };
 
+        // Glass pills like the suggestion buttons of Apple's search; the selected one is blue.
         let chip = |id: &'static str, label: &'static str, on: bool| {
-            div()
+            glass_div(p.glass_tint, 18.)
                 .id(id)
-                .h(px(32.))
-                .px_3()
+                .h(px(40.))
+                .px_4()
                 .flex()
                 .items_center()
-                .rounded_full()
-                .text_size(px(14.))
-                .font_weight(FontWeight::MEDIUM)
-                .bg(if on { rgb(BLUE).into() } else { p.chip })
-                .text_color(if on { rgb(0xffffff).into() } else { p.label })
+                .text_size(px(16.))
+                .font_weight(if on { FontWeight::BOLD } else { FontWeight::MEDIUM })
+                .text_color(if on { rgb(BLUE).into() } else { p.label })
                 .active(|s| s.opacity(0.6))
                 .child(label)
         };
@@ -198,33 +207,22 @@ impl Immagine {
             }))
         };
 
-        let back = super::icons::back_chip(p.glass_tint, "search-back", rgb(BLUE).into()).on_click(cx.listener(|this, _, _, cx| this.close_search(cx)));
-        let field = s.input.as_ref().map(|input| {
-            glass_div(p.glass_tint, 18.)
-                .h(px(36.))
-                .flex_1()
-                .px_3()
-                .flex()
-                .items_center()
-                .child(div().flex_1().child(Input::new(input).appearance(false).bordered(false).cleanable(true)))
-        });
-
         let header = div()
             .px_4()
-            .pt(px(12.))
+            .pt(px(40.))
             .pb_2()
             .flex()
             .flex_col()
             .gap_2()
-            .child(div().flex().flex_row().items_center().gap_2().child(back).children(field))
+            .child(div().text_size(px(34.)).font_weight(FontWeight::BOLD).child("Suchen"))
             .child(
                 div()
                     .flex()
                     .flex_row()
+                    .flex_wrap()
                     .gap_2()
                     .child(mode_chip("search-mode-ctx", "Kontext", Mode::Context))
                     .child(mode_chip("search-mode-name", "Dateiname", Mode::Filename))
-                    .child(div().w(px(8.)))
                     .child(kind_chip("search-kind-all", "Alle", Kind::All))
                     .child(kind_chip("search-kind-img", "Fotos", Kind::Photos))
                     .child(kind_chip("search-kind-vid", "Videos", Kind::Videos)),
@@ -233,5 +231,59 @@ impl Immagine {
 
         let grid = self.photo_grid("search", self.search.items.clone(), 0., (&self.search.scroll, None), p, window, cx);
         self.rubber.shift(div().size_full().flex().flex_col().pt(px(self.top.max(12.))).child(header).child(grid)).into_any_element()
+    }
+
+    /// The bottom bar of the search: a glass field with a lupe and a round close button, riding above the keyboard.
+    pub(super) fn search_bar(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        const H: f32 = 56.;
+        let viewport: f32 = window.viewport_size().height.into();
+        let visible = window.visual_viewport_bounds();
+        let keyboard = (viewport - f32::from(visible.origin.y + visible.size.height)).max(0.);
+        let bottom = if keyboard > 0. { keyboard + 8. } else { self.bottom.max(10.) };
+
+        let field = self.search.input.as_ref().map(|input| {
+            glass_div(p.glass_tint, H / 2.)
+                .id("search-field")
+                .h(px(H))
+                .flex_1()
+                .px_4()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .on_click(cx.listener(|this, _, window, cx| this.focus_search(window, cx)))
+                .child(glyph(Glyph::Search, 22., p.secondary))
+                .child(div().flex_1().child(Input::new(input).appearance(false).bordered(false).cleanable(false)))
+        });
+        let close = glass_div(p.glass_tint, H / 2.)
+            .id("search-close")
+            .size(px(H))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .active(|s| s.opacity(0.6))
+            .on_click(cx.listener(|this, _, window, cx| {
+                window.dismiss_virtual_keyboard();
+                this.close_search(cx);
+            }))
+            .child(glyph(Glyph::Close, 22., p.label));
+
+        div()
+            .id("search-bar")
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .pb(px(bottom))
+            .px(px(16.))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.))
+            .occlude()
+            .children(field)
+            .child(close)
+            .into_any_element()
     }
 }

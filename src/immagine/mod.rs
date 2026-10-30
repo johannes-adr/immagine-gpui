@@ -452,7 +452,14 @@ impl Render for Immagine {
         // gone while the viewer is open, the viewer's own glass sees the photo instead of the grid.
         let viewer_open = self.viewer.as_ref().is_some_and(|v| !v.closing);
         self.sync_range_bar(viewer_open, cx);
-        let chrome = (self.screen == Screen::Timeline && !viewer_open).then(|| self.bars(&p, window, cx));
+        let searching = self.tab == 0 && self.search.open;
+        let chrome = (self.screen == Screen::Timeline && !viewer_open).then(|| {
+            if searching {
+                vec![self.search_bar(&p, window, cx)]
+            } else {
+                self.bars(&p, window, cx)
+            }
+        });
         let viewer = if self.screen == Screen::Timeline { self.viewer_overlay(window, cx) } else { None };
         div()
             .size_full()
