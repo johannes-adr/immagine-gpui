@@ -168,12 +168,8 @@ impl Immagine {
                 row(p, "Mediathek (Sync-Stand)", usage_text(st.store), false),
                 // Counted in assets (bare keys); the bytes include their stored thumbnails and previews.
                 row(p, "Downloads", usage_text(st.downloads.map(|u| Usage { count: st.dl_parts.map_or(u.count, |d| d.0), ..u })), false),
-                row(
-                    p,
-                    "  davon Vorschaubilder",
-                    st.dl_parts.map_or_else(unknown, |(_, t, pr)| format!("{t} Thumbnails · {pr} Vorschauen")),
-                    false,
-                ),
+                row(p, "  davon Thumbnails", st.dl_parts.map_or_else(unknown, |(_, t, _)| t.to_string()), false),
+                row(p, "  davon Vorschauen", st.dl_parts.map_or_else(unknown, |(_, _, pr)| pr.to_string()), false),
                 row(p, "Thumbnail-Cache", usage_text(st.thumbs), false),
                 div().border_t_1().border_color(p.separator).child(
                     div()
