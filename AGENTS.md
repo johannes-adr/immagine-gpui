@@ -27,19 +27,30 @@ python3 serve.py                                   # dev: service worker disable
 ```
 src/
   lib.rs              module list only
-  web.rs              wasm entry: run(top, bottom, dark, webgpu) loads fonts, opens the window,
-                      keeps the ApplicationHandle in a thread-local
+  host/               THE platform seam (see "Platform rule" below)
+    mod.rs              `Host` trait, shared types (`Decoded`, `Pinch`), `Current` chosen by cfg
+    web/                wasm only: fetch, IndexedDB, localStorage, createImageBitmap, DOM video,
+                        pointer events, selftest, `entry::run` (wasm_bindgen entry: loads fonts, opens the window)
+    desktop/            non-wasm: ureq, files, `image` crate, `entry::run` (native window)
+  bin/immagine-desktop.rs  native entry, calls `host::desktop::entry::run`
   theme.rs            colors, glass tints, Palette (light/dark)
-  util.rs             lerp, anim, spring_out, now_ms
+  util.rs             lerp, anim, spring_out, now_ms (delegates to `Host`)
   components/         reusable building blocks
     glass.rs            glass_div (liquid glass via Window::paint_glass)
     photo.rs            generated "photo" (gradient, sun, hills)
     fps.rs              FpsMeter and the FPS badge
-  app/                root view `Todos`: state, tab switching, background, Render
-    tab_bar.rs          floating glass tab bar
-    reminders/          Reminders tab: header, list, composer (mod.rs), one row (row.rs)
-    photos/             Photos tab: grid with press-grow (mod.rs), full-screen zoom overlay (viewer.rs)
+  immagine/           the Immich photo app (root view `Immagine`, platform independent)
+  app/                older Reminders + Photos demo (`Todos`), not wired into `run` any more
+  logic/              pure logic, no gpui/platform imports
 ```
+
+**Platform rule (hard):** platform dependencies enter the crate only through `src/host/`.
+- Outside `src/host/` there is no `web_sys`, `js_sys`, `wasm_bindgen`, `wasm_bindgen_futures`, `ureq`, `std::fs`/`std::env` for app data, and no `#[cfg(target_family/target_os ...)]`. The one exception is `src/bin/immagine-desktop.rs`, which needs the cfg to compile as an empty `main` on wasm.
+- `immagine/`, `app/`, `components/`, `util.rs` and `logic/` reach the platform through `host::Current` and the `Host` trait only (`use crate::host::{Current as H, Host}`). `logic/` imports not even that: it uses the traits in `logic/ports.rs`.
+- Missing capability? Add a method to `Host` and implement it in **both** `host/web` and `host/desktop` (return `None`/no-op where a platform cannot do it, and say so in the module docs). Never `cfg` around a call site.
+- Platform crates belong in the matching `[target.'cfg(...)'.dependencies]` block of `Cargo.toml`.
+- Quick check: `grep -rnE 'cfg\((not\()?target_(family|os)|web_sys|wasm_bindgen|js_sys|ureq' src --include='*.rs' | grep -v '^src/host/'` must print only `src/bin/immagine-desktop.rs`.
+- Renderer-level platform differences (WGPU vs Metal glass) live in `vendor/`, not in `src/`.
 
 All tab code is `impl Todos` split across the child modules of `app`; the struct's private fields are visible to every descendant module, so methods that cross module boundaries are `pub(crate)`. `www/index.html` passes safe-area insets, color scheme and `!!navigator.gpu` to `run`.
 
