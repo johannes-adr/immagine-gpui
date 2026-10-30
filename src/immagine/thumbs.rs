@@ -1,13 +1,13 @@
 //! Image store for grid thumbnails and viewer previews.
 //!
 //! GPUI's own `img(url)` decodes in WASM on the UI thread and keeps every decoded image forever. This store
-//! loads through the browser's decoder (`web_adapters::image_loader`), keeps decoded images in a byte-bounded
+//! loads through the browser's decoder (`Host::decode_url`), keeps decoded images in a byte-bounded
 //! LRU, runs at most `MAX_ACTIVE` loads at once, and drops requests for tiles that scrolled away before their
 //! turn. Images are `RenderImage`s (BGRA) that GPUI paints through `img(Arc<RenderImage>)`.
 
 use super::Immagine;
 use crate::logic::thumbhash;
-use crate::web_adapters::image_loader;
+use crate::host::{Current as H, Decoded, Host};
 use gpui_kit::*;
 use image::{Frame, RgbaImage};
 use std::cell::RefCell;
@@ -181,14 +181,14 @@ fn pump(store: &SharedThumbs, cx: &mut App) {
         };
         let store = store.clone();
         cx.spawn(async move |cx| {
-            let result = image_loader::decode_url(&job.url).await;
+            let result = H::decode_url(&job.url).await;
             let _ = cx.update(|app| finish(&store, job.key, result, app));
         })
         .detach();
     }
 }
 
-fn finish(store: &SharedThumbs, key: String, result: Result<image_loader::Decoded, String>, cx: &mut App) {
+fn finish(store: &SharedThumbs, key: String, result: Result<Decoded, String>, cx: &mut App) {
     let view = {
         let mut s = store.borrow_mut();
         s.active -= 1;

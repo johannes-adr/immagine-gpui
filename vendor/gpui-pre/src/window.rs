@@ -5178,6 +5178,15 @@ impl Window {
     pub fn paint_glass(&mut self, bounds: Bounds<Pixels>, style: GlassStyle) {
         self.invalidator.debug_assert_paint();
 
+        // The Metal renderer's surface primitive carries a CVPixelBuffer and has no glass pass.
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            let _ = (bounds, style);
+            return;
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        {
         let scale = self.scale_factor();
         let bounds = self.snap_bounds(bounds);
         let content_mask = self.snapped_content_mask();
@@ -5186,8 +5195,6 @@ impl Window {
             order: 0,
             bounds,
             content_mask,
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            image_buffer: unreachable!("glass surfaces have no pixel buffer"),
             glass: crate::GlassParams {
                 corner_radius: f32::from(style.corner_radius) * scale,
                 blur: f32::from(style.blur) * scale,
@@ -5198,6 +5205,7 @@ impl Window {
                 tint: [tint.r, tint.g, tint.b, tint.a],
             },
         });
+        }
     }
 
     /// Paint a surface into the scene for the next frame at the current z-index.

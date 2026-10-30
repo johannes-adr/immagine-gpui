@@ -3,14 +3,8 @@
 
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
+use crate::host::Decoded;
 use web_sys::{Blob, ImageBitmap, OffscreenCanvas, OffscreenCanvasRenderingContext2d, RequestInit, RequestCredentials, Response};
-
-/// Straight-alpha RGBA, row-major.
-pub struct Decoded {
-    pub width: u32,
-    pub height: u32,
-    pub rgba: Vec<u8>,
-}
 
 fn js(error: JsValue) -> String {
     error.as_string().unwrap_or_else(|| format!("{error:?}"))

@@ -1,22 +1,8 @@
 use gpui_kit::*;
 use std::time::Duration;
 
-#[cfg(target_family = "wasm")]
-mod js {
-    use wasm_bindgen::prelude::*;
-
-    #[wasm_bindgen]
-    extern "C" {
-        #[wasm_bindgen(js_namespace = performance, js_name = now)]
-        pub fn now() -> f64;
-    }
-}
-
 pub(crate) fn now_ms() -> f64 {
-    #[cfg(target_family = "wasm")]
-    return js::now();
-    #[cfg(not(target_family = "wasm"))]
-    0.
+    <crate::host::Current as crate::host::Host>::now_ms()
 }
 
 pub(crate) fn lerp(a: f32, b: f32, t: f32) -> f32 {

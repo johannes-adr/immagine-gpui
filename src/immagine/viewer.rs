@@ -13,9 +13,7 @@ use crate::logic::models::asset_info::AssetInfoFormat;
 use crate::logic::models::timeline::TimelineItem;
 use crate::theme::{BLUE, GLASS_TINT_DARK, RED};
 use crate::util::{anim, lerp, now_ms};
-use crate::web_adapters::fetch::FetchTransport;
-use crate::web_adapters::pinch::{self, Pinch};
-use crate::web_adapters::video::{self, VideoHandle};
+use crate::host::{Current as H, Host, Pinch, VideoHandle};
 use gpui_kit::*;
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -195,7 +193,7 @@ impl Immagine {
         if self.pinch.is_none() {
             let weak = cx.weak_entity();
             let async_cx = cx.to_async();
-            self.pinch = pinch::install(move |event| {
+            self.pinch = H::install_gestures(move |event| {
                 let mut app = async_cx.clone();
                 weak.update(&mut app, |this, cx| this.pinch(event, cx)).ok();
             });
@@ -444,7 +442,7 @@ impl Immagine {
         let (id, origin, token) = (item.id.clone(), self.origin.clone(), self.token.clone());
         cx.spawn(async move |this, cx| {
             let asset = async {
-                let client = ImmichClient::new(&origin, FetchTransport).ok()?;
+                let client = ImmichClient::new(&origin, H::transport()).ok()?;
                 client.asset(&id, &token).await.ok()
             }
             .await;
@@ -467,7 +465,7 @@ impl Immagine {
         let Some(v) = self.viewer.as_mut().filter(|v| !v.closing) else { return };
         let Some(item) = v.items.get(v.index).filter(|i| i.is_video()) else { return };
         let url = format!("{origin}/api/assets/{}/video/playback", item.id);
-        v.video = video::show(&url, top, 110.);
+        v.video = H::show_video(&url, top, 110.);
         cx.notify();
     }
 

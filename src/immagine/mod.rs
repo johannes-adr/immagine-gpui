@@ -18,7 +18,7 @@ use crate::logic::models::timeline::TimelineItem;
 use crate::logic::store::{MemoryStore, Store};
 use crate::logic::sync::engine::SyncEngine;
 use crate::theme::Palette;
-use crate::web_adapters::{fetch::FetchTransport, idb, local_storage, mark, WebClock};
+use crate::host::{Current as H, GestureHandle, Host, SystemClock, Transport};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 use std::cell::RefCell;
@@ -30,7 +30,7 @@ const DB: &str = "immagine";
 const SNAPSHOT_KEY: &str = "store";
 const TOKEN_KEY: &str = "immagine.token";
 
-type Engine = SyncEngine<MemoryStore, FetchTransport, WebClock>;
+type Engine = SyncEngine<MemoryStore, Transport, SystemClock>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
@@ -79,7 +79,7 @@ pub(crate) struct Immagine {
     viewer: Option<viewer::Viewer>,
     viewer_serial: u32,
     thumbs: thumbs::SharedThumbs,
-    pinch: Option<crate::web_adapters::pinch::PinchHandle>,
+    pinch: Option<GestureHandle>,
     albums: albums::AlbumsState,
     people: people::PeopleState,
 }
@@ -115,7 +115,7 @@ impl Immagine {
         })
         .detach();
 
-        let origin = web_sys::window().and_then(|w| w.location().origin().ok()).unwrap_or_default();
+        let origin = H::origin();
         let mut this = Self {
             screen: Screen::Loading,
             origin,
@@ -172,26 +172,26 @@ impl Immagine {
 
     /// Start-up: with a saved session, show the stored timeline at once and sync in the background.
     fn resume(&mut self, cx: &mut Context<Self>) {
-        let Some(token) = local_storage::get(TOKEN_KEY).filter(|t| !t.is_empty()) else {
+        let Some(token) = H::setting_get(TOKEN_KEY).filter(|t| !t.is_empty()) else {
             self.screen = Screen::Login;
             return;
         };
         self.token = token;
         cx.spawn(async move |this, cx| {
-            mark("resume: start");
-            let bytes = idb::get(DB, SNAPSHOT_KEY).await;
-            mark("resume: snapshot read");
+            H::mark("resume: start");
+            let bytes = H::blob_get(DB, SNAPSHOT_KEY).await;
+            H::mark("resume: snapshot read");
             let store = match bytes {
                 Ok(Some(bytes)) => {
-                    mark(&format!("resume: restoring {} bytes", bytes.len()));
+                    H::mark(&format!("resume: restoring {} bytes", bytes.len()));
                     MemoryStore::restore(&bytes).unwrap_or_else(|_| MemoryStore::new())
                 }
                 _ => MemoryStore::new(),
             };
-            mark("resume: restored");
+            H::mark("resume: restored");
             let _ = this.update(cx, |t, cx| {
                 t.install_engine(store, cx);
-                mark("resume: engine installed (timeline built)");
+                H::mark("resume: engine installed (timeline built)");
                 t.sync(cx);
             });
         })
@@ -199,7 +199,7 @@ impl Immagine {
     }
 
     fn install_engine(&mut self, store: MemoryStore, cx: &mut Context<Self>) {
-        match SyncEngine::new(store, FetchTransport, WebClock, &self.origin) {
+        match SyncEngine::new(store, H::transport(), H::clock(), &self.origin) {
             Ok(engine) => {
                 self.items = Rc::new(oldest_first(engine.store().fetch_timeline()));
                 self.albums.refresh(engine.store());
@@ -229,7 +229,7 @@ impl Immagine {
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = async {
-                let client = ImmichClient::new(&origin, FetchTransport)?;
+                let client = ImmichClient::new(&origin, H::transport())?;
                 let auth = client.login(&email, &password).await?;
                 auth.access_token.ok_or_else(|| ClientError::Decoding("Die Antwort enthält kein Token.".into()))
             }
@@ -238,7 +238,7 @@ impl Immagine {
                 t.logging_in = false;
                 match result {
                     Ok(token) => {
-                        local_storage::set(TOKEN_KEY, &token);
+                        H::setting_set(TOKEN_KEY, &token);
                         t.token = token;
                         t.install_engine(MemoryStore::new(), cx);
                         t.sync(cx);
@@ -252,7 +252,7 @@ impl Immagine {
     }
 
     fn log_out(&mut self, cx: &mut Context<Self>) {
-        local_storage::remove(TOKEN_KEY);
+        H::setting_remove(TOKEN_KEY);
         self.token.clear();
         self.engine = None;
         self.items = Rc::new(Vec::new());
@@ -263,7 +263,7 @@ impl Immagine {
         self.tab = 0;
         self.screen = Screen::Login;
         cx.spawn(async move |_, _| {
-            let _ = idb::put(DB, SNAPSHOT_KEY, b"").await;
+            let _ = H::blob_put(DB, SNAPSHOT_KEY, b"").await;
         })
         .detach();
         cx.notify();
@@ -279,16 +279,16 @@ impl Immagine {
         let token = self.token.clone();
         cx.notify();
         cx.spawn(async move |this, cx| {
-            mark("sync: start");
+            H::mark("sync: start");
             let outcome = engine.sync(&token).await;
-            mark("sync: engine.sync done");
+            H::mark("sync: engine.sync done");
             let changed = match &outcome {
                 Ok(run) => run.full_sync || run.stream.assets_changed,
                 Err(_) => false,
             };
             let items = changed.then(|| engine.store().fetch_timeline());
             let snapshot = if changed { engine.store().snapshot().ok() } else { None };
-            mark("sync: timeline + snapshot built");
+            H::mark("sync: timeline + snapshot built");
             let _ = this.update(cx, |t, cx| {
                 t.engine = Some(engine);
                 if let Some(e) = &t.engine {
@@ -309,8 +309,8 @@ impl Immagine {
                 cx.notify();
             });
             if let Some(bytes) = snapshot {
-                let _ = idb::put(DB, SNAPSHOT_KEY, &bytes).await;
-                mark("sync: snapshot stored");
+                let _ = H::blob_put(DB, SNAPSHOT_KEY, &bytes).await;
+                H::mark("sync: snapshot stored");
             }
         })
         .detach();

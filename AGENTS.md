@@ -89,6 +89,8 @@ Glass semantics to remember: later glass elements do not see content painted bet
 
 Porting Robin's Immagine (`../immagine`, Swift/iOS, clone of github.com/RobinCoding/immagine) to this app; plan and agent split in `docs/immagine-port-plan.md`.
 
+- **Platform seam:** `src/host/mod.rs` defines the `Host` trait (transport, clock, origin, settings, blob store, image decoding, video, touch gestures). `host::Current` is chosen by cfg: `host/web/` (wasm: fetch, IndexedDB, localStorage, createImageBitmap, DOM video, pointer events, `entry::run`) or `host/desktop/` (everything else: `ureq`, files under `IMMAGINE_DATA_DIR` / the user data dir, `image` crate; no video, no touch gestures). `immagine/`, `app/`, `logic/` use only `Host`; no `web_sys`/`wasm_bindgen` outside `host/web`. New platform feature = new `Host` method + both impls.
+- Desktop build: `cargo run --bin immagine-desktop` (server from `IMMICH_URL`, default `http://immich.server.local`; 402x874 window). Metal has no glass pass, so `Window::paint_glass` is a no-op on macOS/iOS (the tinted fallback shows). Desktop gaps: video playback and single-finger viewer drag (that comes from `Host::install_gestures`, which is `None` here).
 - Platform-independent logic lives in `src/logic/` and must not import `gpui`, `web-sys` or `wasm-bindgen`. Test it natively with `cargo test --lib` (the crate is `rlib` + `cdylib`).
 - The module is called `logic`, not `core`, to avoid clashing with the `core` crate.
 - `serve.py` proxies `/api/*` to `IMMICH_URL` (default `http://immich.server.local`), so the page is same-origin. Credentials for E2E come from the environment (`E2E_SERVER_URL`, `E2E_EMAIL`, `E2E_PASSWORD`), never from files in the repo.

@@ -7,7 +7,7 @@ use crate::logic::client::{ClientError, ImmichClient};
 use crate::logic::models::person::{PeopleOrder, Person};
 use crate::logic::models::timeline::TimelineItem;
 use crate::theme::{Palette, BLUE, RED};
-use crate::web_adapters::fetch::FetchTransport;
+use crate::host::{Current as H, Host};
 use gpui_kit::*;
 use std::rc::Rc;
 
@@ -55,7 +55,7 @@ pub(super) struct PeopleState {
 
 /// Every person the server knows, paging until the end.
 async fn all_people(origin: &str, token: &str) -> Result<Vec<Person>, ClientError> {
-    let client = ImmichClient::new(origin, FetchTransport)?;
+    let client = ImmichClient::new(origin, H::transport())?;
     let mut all: Vec<Person> = Vec::new();
     for page in 1..=MAX_PAGES {
         let answer = client.people(page, PEOPLE_PAGE, token).await?;
@@ -74,7 +74,7 @@ async fn all_people(origin: &str, token: &str) -> Result<Vec<Person>, ClientErro
 
 /// Every photo of one person, newest first; photos without a capture date sort last.
 async fn person_photos(origin: &str, person_id: &str, token: &str) -> Result<Vec<TimelineItem>, ClientError> {
-    let client = ImmichClient::new(origin, FetchTransport)?;
+    let client = ImmichClient::new(origin, H::transport())?;
     let mut items: Vec<TimelineItem> = Vec::new();
     for page in 1..=MAX_PAGES {
         let answer = client.person_assets(person_id, page, PHOTO_PAGE, token).await?;

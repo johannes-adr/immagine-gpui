@@ -8,19 +8,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::PointerEvent;
 
-#[derive(Clone, Copy, Debug)]
-pub enum Pinch {
-    /// A second finger touched down.
-    Begin,
-    /// `ratio` is this move's change of the finger distance (1.0 = unchanged); `x`/`y` the midpoint in CSS px.
-    Move { ratio: f32, x: f32, y: f32 },
-    /// One of the two fingers lifted.
-    End,
-    /// A single finger touched down, moved (raw position, no gesture slop or axis lock) or lifted.
-    Down { x: f32, y: f32 },
-    Drag { x: f32, y: f32 },
-    Up { x: f32, y: f32 },
-}
+pub use crate::host::Pinch;
 
 pub struct PinchHandle {
     listeners: Vec<(&'static str, Closure<dyn FnMut(PointerEvent)>)>,
