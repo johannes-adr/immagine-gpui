@@ -3,7 +3,14 @@
 # FAST=1 skips wasm-opt and heavy compression (quick dev builds).
 # Needs: wasm-bindgen CLI (matching Cargo.lock), wasm-opt (binaryen), brotli.
 set -e
-RUSTFLAGS='-C link-arg=-zstack-size=8388608' cargo build --target wasm32-unknown-unknown --release
+# Threads: +atomics makes the wasm memory shared, so GPUI's background executor runs on Web Workers
+# (wasm_thread). std must be rebuilt with atomics (-Z build-std). The page must be crossOriginIsolated
+# (COOP/COEP, see serve.py / sw.js), otherwise GPUI falls back to one thread. Max memory 1 GiB: iOS
+# refuses large shared memories. This nightly does not add the shared-memory/TLS linker args by itself.
+LINK='--shared-memory --import-memory --max-memory=1073741824 -zstack-size=8388608
+  --export=__wasm_init_tls --export=__tls_size --export=__tls_align --export=__tls_base'
+RUSTFLAGS="-C target-feature=+atomics,+bulk-memory,+mutable-globals $(for a in $LINK; do printf -- '-C link-arg=%s ' "$a"; done)" \
+  cargo build --target wasm32-unknown-unknown --release -Z build-std=std,panic_abort
 wasm-bindgen --target web --out-dir www/pkg target/wasm32-unknown-unknown/release/gpui_web_demo.wasm
 W=www/pkg/gpui_web_demo_bg.wasm
 if [ -z "$FAST" ] && command -v wasm-opt >/dev/null; then
