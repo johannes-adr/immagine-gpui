@@ -20,6 +20,9 @@ const MAX_ACTIVE: usize = 6;
 const BYTE_BUDGET: usize = 160 * 1024 * 1024;
 /// A queued request not asked for again within this many frames has scrolled out of sight.
 const STALE_FRAMES: u64 = 4;
+/// A failed load is retried after this many frames, at most `MAX_TRIES` times in all.
+const RETRY_FRAMES: u64 = 40;
+const MAX_TRIES: u8 = 4;
 
 struct Entry {
     image: Arc<RenderImage>,
@@ -38,7 +41,8 @@ pub(super) struct Thumbs {
     images: HashMap<String, Entry>,
     pending: HashSet<String>,
     queue: Vec<Job>,
-    failed: HashSet<String>,
+    /// Keys whose load failed: the frame it happened in and how often. They are retried a few times.
+    failed: HashMap<String, (u64, u8)>,
     evicted: Vec<Arc<RenderImage>>,
     frame: u64,
     seq: u64,
@@ -54,7 +58,7 @@ pub(super) fn new(view: WeakEntity<Immagine>) -> SharedThumbs {
         images: HashMap::new(),
         pending: HashSet::new(),
         queue: Vec::new(),
-        failed: HashSet::new(),
+        failed: HashMap::new(),
         evicted: Vec::new(),
         frame: 0,
         seq: 0,
@@ -122,8 +126,14 @@ pub(super) fn get(store: &SharedThumbs, key: &str, url: impl FnOnce() -> String,
             entry.stamp = frame;
             return Some(entry.image.clone());
         }
-        if s.failed.contains(key) || s.pending.contains(key) {
+        if s.pending.contains(key) {
             return None;
+        }
+        if let Some(&(at, tries)) = s.failed.get(key) {
+            // A failed load (network hiccup, decoder busy) is tried again a little later, a few times.
+            if tries >= MAX_TRIES || frame < at + RETRY_FRAMES {
+                return None;
+            }
         }
         if let Some(job) = s.queue.iter_mut().find(|j| j.key == key) {
             job.frame = frame;
@@ -184,9 +194,14 @@ fn finish(store: &SharedThumbs, key: String, result: Result<image_loader::Decode
         s.active -= 1;
         s.pending.remove(&key);
         match result.ok().and_then(|d| render_image(d.width, d.height, d.rgba).map(|i| (i, (d.width * d.height * 4) as usize))) {
-            Some((image, bytes)) => s.insert(key, image, bytes),
+            Some((image, bytes)) => {
+                s.failed.remove(&key);
+                s.insert(key, image, bytes)
+            }
             None => {
-                s.failed.insert(key);
+                let frame = s.frame;
+                let tries = s.failed.get(&key).map_or(0, |f| f.1) + 1;
+                s.failed.insert(key, (frame, tries));
             }
         }
         s.view.clone()
