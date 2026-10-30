@@ -19,7 +19,6 @@ use super::outbox::{self, FlushReport};
 use super::stream::{self, StreamReport, StreamResult};
 use crate::logic::client::{ClientError, ImmichClient};
 use crate::logic::models::album_op::AlbumOp;
-use crate::logic::models::asset::Asset;
 use crate::logic::ports::{Clock, HttpRequest, HttpResponse, HttpTransport, TransportError};
 use crate::logic::store::Store;
 
@@ -118,22 +117,24 @@ impl<S: Store, T: HttpTransport, C: Clock> SyncEngine<S, T, C> {
     /// the server no longer has. Stamps `last_sync` and clears `needs_full_sync`. Returns the ids
     /// whose rendered image changed.
     pub async fn full_sync(&mut self, token: &str) -> Result<BTreeSet<String>, ClientError> {
-        let mut all: Vec<Asset> = Vec::new();
+        // Each page goes into the store as it arrives: the work is split into page-sized slices
+        // (the awaited fetch between them lets the browser paint) instead of one 26k-asset burst.
+        let mut server_ids: BTreeSet<String> = BTreeSet::new();
+        let mut changed = BTreeSet::new();
         let mut page = 1u32;
         for _ in 0..MAX_PAGES {
             let response = self.client.search_assets(page, PAGE_SIZE, token).await?;
             let next = response.assets.next_page.as_deref().and_then(|n| n.parse::<u32>().ok());
             let has_items = !response.assets.items.is_empty();
-            all.extend(response.assets.items);
+            server_ids.extend(response.assets.items.iter().map(|asset| asset.id.clone()));
+            changed.extend(self.store.upsert_assets(&response.assets.items));
             match next {
                 Some(next_page) if has_items => page = next_page,
                 _ => break,
             }
         }
-        let changed = self.store.upsert_assets(&all);
         // A complete listing is the truth: drop what the server no longer has (deletes the stream
         // missed, e.g. after a reset).
-        let server_ids: BTreeSet<String> = all.iter().map(|asset| asset.id.clone()).collect();
         let stale: Vec<String> = self.store.asset_ids().difference(&server_ids).cloned().collect();
         self.store.delete_assets(&stale);
 

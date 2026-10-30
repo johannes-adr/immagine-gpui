@@ -598,14 +598,13 @@ impl Immagine {
                 }))
         });
 
+        // While it shrinks away the viewer lets everything through, so the page below can be scrolled at once.
+        let mut root = div().id("viewer-root").absolute().top_0().left_0().size_full();
+        if !closing {
+            root = root.occlude();
+        }
         Some(
-            div()
-                .id("viewer-root")
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .occlude()
+            root
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| this.drag_start(e.position, cx)))
                 .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.drag_move(e.position, cx)))
                 .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, window, cx| {
