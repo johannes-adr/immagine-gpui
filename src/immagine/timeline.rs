@@ -18,6 +18,7 @@ const WIDE_VIEWPORT: f32 = 700.;
 const SNAP_AT: f32 = 0.3;
 const SETTLE_MS: f64 = 240.;
 const WHEEL_IDLE_MS: f64 = 140.;
+const FADE_MS: f64 = 200.;
 /// Columns from which the timeline shows month labels over the grid.
 const MONTH_LABEL_COLS: usize = 15;
 /// (year, month) of a photo, for spotting where a month starts.
@@ -44,11 +45,16 @@ impl Immagine {
         }
     }
 
-    /// Settled columns: chosen on first use from the width (3 on phones, 5 on iPad / desktop sizes).
+    /// Settled columns until the user zooms: 3 on phones, 5 on iPad / desktop sizes (follows the width, which is
+    /// not final at the first frame).
     pub(super) fn grid_default(&mut self, vw: f32) {
-        if self.grid_cols == 0 {
-            self.grid_cols = if vw >= WIDE_VIEWPORT { 5 } else { 3 };
-            self.grid_f = self.grid_cols as f32;
+        if self.grid_user || self.grid_pinching || self.grid_anim.is_some() {
+            return;
+        }
+        let cols = if vw >= WIDE_VIEWPORT { 5 } else { 3 };
+        if self.grid_cols != cols {
+            self.grid_cols = cols;
+            self.grid_f = cols as f32;
         }
     }
 
@@ -57,7 +63,10 @@ impl Immagine {
             return;
         }
         self.grid_pinching = true;
+        self.grid_user = true;
         self.grid_anim = None;
+        self.grid_fade = 1.;
+        self.grid_fade_at = 0.;
         self.grid_from = ZOOM_LEVELS.iter().copied().min_by(|a, b| (*a as f32 - self.grid_f).abs().total_cmp(&(*b as f32 - self.grid_f).abs())).unwrap_or(3);
         let (first, last) = self.visible.get();
         self.grid_anchor = (first + last) / 2;
@@ -68,7 +77,7 @@ impl Immagine {
         self.grid_begin();
         let lo = ZOOM_LEVELS[0] as f32 * 0.85;
         let hi = *ZOOM_LEVELS.last().unwrap() as f32 * 1.15;
-        self.grid_f = (self.grid_f / ratio.powf(1.2)).clamp(lo.max(1.), hi);
+        self.grid_f = (self.grid_f / ratio.powf(1.2)).clamp(lo, hi);
         self.timeline_jump.set(Some(self.grid_anchor));
         cx.notify();
     }
@@ -119,11 +128,23 @@ impl Immagine {
             let t = ((now - start) / SETTLE_MS).clamp(0., 1.) as f32;
             let e = 1. - (1. - t).powi(3);
             self.grid_f = from + (to as f32 - from) * e;
+            let switching = to != self.grid_cols;
+            self.grid_fade = if switching { 1. - ((t - 0.7) / 0.3).clamp(0., 1.) } else { 1. };
             self.timeline_jump.set(Some(self.grid_anchor));
             if t >= 1. {
                 self.grid_anim = None;
                 self.grid_cols = to;
                 self.grid_f = to as f32;
+                if switching {
+                    self.grid_fade_at = now;
+                }
+            }
+            window.request_animation_frame();
+        } else if self.grid_fade_at > 0. {
+            let d = ((now - self.grid_fade_at) / FADE_MS).clamp(0., 1.) as f32;
+            self.grid_fade = d;
+            if d >= 1. {
+                self.grid_fade_at = 0.;
             }
             window.request_animation_frame();
         }
@@ -146,7 +167,7 @@ impl Immagine {
                     v.update(cx, |this, cx| {
                         if this.grid_active() {
                             used = true;
-                            this.grid_apply((-dy * 0.01).exp(), cx);
+                            this.grid_apply((dy * 0.01).exp(), cx);
                             this.grid_wheel_at = crate::util::now_ms();
                         }
                     })
@@ -197,13 +218,15 @@ impl Immagine {
     ) -> Div {
         let vw: f32 = window.viewport_size().width.into();
         let timeline = scroll.1.is_some();
-        // The timeline's column count is fractional while pinching: cells have the exact size for `cols_f` columns
-        // and the last column of a row is cut off by the screen edge (it slides in as the cells shrink).
-        let cols_f = if timeline { self.grid_f.max(1.) } else { ((vw / 120.).floor() as usize).clamp(3, 8) as f32 };
-        let columns = cols_f.ceil() as usize;
-        let gap = if columns >= MONTH_LABEL_COLS { 1. } else { GAP };
+        // The timeline zooms by scaling the cells of the settled layout (`grid_cols` columns per row) about the middle
+        // of the screen; no photo changes row while pinching. The layout only switches to the target level once the
+        // settle animation is over, hidden by a short fade (`grid_fade`).
+        let cols_f = if timeline { self.grid_f.max(0.5) } else { ((vw / 120.).floor() as usize).clamp(3, 8) as f32 };
+        let columns = if timeline { self.grid_cols.max(1) } else { cols_f as usize };
+        let gap = if cols_f >= MONTH_LABEL_COLS as f32 - 0.5 { 1. } else { GAP };
         let cell = (vw - gap * (cols_f - 1.)) / cols_f;
         let cell = if cols_f.fract() == 0. { cell.floor() } else { cell };
+        let fade = if timeline { self.grid_fade } else { 1. };
         let visible = self.visible.clone();
         let rows = items.len().div_ceil(columns);
         let items_empty = items.is_empty();
@@ -217,6 +240,7 @@ impl Immagine {
         // The viewer's photo flies to/from its tile, so the tile looks empty meanwhile instead of showing it twice.
         let hidden_id = self.viewer_item_id();
         let list_scroll = scroll.0.0.borrow().base_handle.clone();
+        let list_scroll_set = list_scroll.clone();
         let grid_bounds = self.grid_bounds.clone();
         // A uniform list measures one row height for all items and does not account for its own padding when it
         // picks the visible rows (rows went missing at the edges). So the space above the first row (under the
@@ -261,6 +285,7 @@ impl Immagine {
                         div()
                             .id((id, idx))
                             .relative()
+                            .opacity(fade)
                             .size(px(cell))
                             .flex_none()
                             .when(!hidden, |d| d.bg(placeholder))
@@ -289,7 +314,7 @@ impl Immagine {
                             })
                     });
                     // At the smallest cells a label names the month that starts in this row.
-                    let label = (timeline && columns >= MONTH_LABEL_COLS)
+                    let label = (timeline && cols_f >= MONTH_LABEL_COLS as f32 - 0.5)
                         .then(|| {
                             let (start, end) = (row * columns, ((row + 1) * columns).min(items.len()));
                             (start..end).find(|&i| i == 0 || month_of(&items[i]) != month_of(&items[i - 1])).and_then(|i| month_label(&items[i].date_bucket))
@@ -297,8 +322,10 @@ impl Immagine {
                         .flatten();
                     div()
                         .relative()
+                        .w_full()
                         .h(px(cell + gap))
                         .flex()
+                        .justify_center()
                         .gap(px(gap))
                         .children(tiles)
                         .children(label.map(|text| {
@@ -330,7 +357,17 @@ impl Immagine {
         }
         if placed.is_some() {
             if let Some(j) = self.timeline_jump.take() {
-                handle.scroll_to_item(top_rows + j / columns, ScrollStrategy::Center);
+                if self.grid_pinching || self.grid_anim.is_some() {
+                    // Zooming: keep the anchor photo's row at the middle with a pixel-exact offset.
+                    let vh: f32 = window.viewport_size().height.into();
+                    let h = if lead > 0. { vh - shift_top - shift_bottom } else { vh };
+                    let total = (top_rows + rows + bottom_rows) as f32 * row_h;
+                    let at = (top_rows + j / columns) as f32 * row_h + cell / 2.;
+                    let y = (at - h / 2.).clamp(0., (total - h).max(0.));
+                    list_scroll_set.set_offset(point(px(0.), px(-y)));
+                } else {
+                    handle.scroll_to_item(top_rows + j / columns, ScrollStrategy::Center);
+                }
             }
         }
         let list = list.track_scroll(handle);

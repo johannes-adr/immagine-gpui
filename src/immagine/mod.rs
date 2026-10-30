@@ -102,10 +102,15 @@ pub(crate) struct Immagine {
     grid_from: usize,
     grid_anchor: usize,
     grid_pinching: bool,
+    /// The user zoomed the grid: the width-based default no longer applies.
+    grid_user: bool,
     /// (start, columns at start, target level) of the settle animation after a pinch.
     grid_anim: Option<(f64, f32, usize)>,
     /// Last ctrl+wheel (trackpad pinch in browsers); a pause settles the gesture.
     grid_wheel_at: f64,
+    /// Opacity of the grid's photos (dips while the layout switches to another column level).
+    grid_fade: f32,
+    grid_fade_at: f64,
     visible: Rc<std::cell::Cell<(usize, usize)>>,
     header_span: std::cell::Cell<(usize, usize)>,
     /// Rubber band shared by every scroll view (timeline, albums, people, their pages).
@@ -218,8 +223,11 @@ impl Immagine {
             grid_from: 3,
             grid_anchor: 0,
             grid_pinching: false,
+            grid_user: false,
             grid_anim: None,
             grid_wheel_at: 0.,
+            grid_fade: 1.,
+            grid_fade_at: 0.,
             visible: Rc::new(std::cell::Cell::new((0, 0))),
             header_span: std::cell::Cell::new((0, 0)),
             rubber: Default::default(),
