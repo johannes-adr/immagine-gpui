@@ -54,6 +54,8 @@ struct Job {
     side: u32,
     frame: u64,
     seq: u64,
+    /// Prefetch for tiles not on screen yet: always behind visible requests, promoted when a tile asks for it.
+    low: bool,
 }
 
 /// A load in flight: its cancel token and the last frame something asked for it.
@@ -142,6 +144,8 @@ pub(super) struct Thumbs {
     speed: f32,
     speed_at: f64,
     wake_pending: bool,
+    /// The last real scroll movement was towards the top of the list (offset grew); prefetch looks that way.
+    up: bool,
 }
 
 pub(super) type SharedThumbs = Rc<RefCell<Thumbs>>;
@@ -164,6 +168,7 @@ pub(super) fn new(view: WeakEntity<Immagine>, local: Rc<RefCell<HashSet<String>>
         speed: 0.,
         speed_at: f64::MIN,
         wake_pending: false,
+        up: false,
     }))
 }
 
@@ -190,9 +195,18 @@ impl Thumbs {
         if dt < 1. {
             return;
         }
+        // Keep the old direction while standing still.
+        if offset != prev {
+            self.up = offset > prev;
+        }
         self.speed = if dt > SAMPLE_GAP_MS { 0. } else { (offset - prev).abs() / dt as f32 };
         self.speed_at = now;
         self.scroll = Some((offset, now));
+    }
+
+    /// Whether the user last scrolled towards the start of the list (false = down or unknown).
+    pub(super) fn moving_up(&self) -> bool {
+        self.up
     }
 
     fn held(&self) -> bool {
@@ -291,6 +305,7 @@ pub(super) fn get_sized(store: &SharedThumbs, key: &str, min_side: u32, url: imp
         }
         if let Some(job) = s.queue.iter_mut().find(|j| j.key == key) {
             job.frame = frame;
+            job.low = false;
             job.side = bigger(job.side, min_side);
         } else if s.held() {
             let wake = !std::mem::replace(&mut s.wake_pending, true);
@@ -301,13 +316,57 @@ pub(super) fn get_sized(store: &SharedThumbs, key: &str, min_side: u32, url: imp
             return have;
         } else {
             s.seq += 1;
-            let job = Job { key: key.to_string(), url: url(), side: min_side, frame, seq: s.seq };
+            let job = Job { key: key.to_string(), url: url(), side: min_side, frame, seq: s.seq, low: false };
             s.queue.push(job);
         }
         have
     };
     pump(store, cx);
     have
+}
+
+/// Queues low-priority loads for tiles just beyond the visible rows, so they are there when scrolled in. `jobs` are
+/// `(asset id, url builder)`; the key is `t:<id>` and the url is only built for jobs that really get queued. Does
+/// nothing during a fling or while a visible tile is still waiting. Called every frame while idle, which also keeps
+/// the queued and running prefetch jobs alive (the staleness rule is the same as for visible requests).
+pub(super) fn prefetch<'a, F: FnOnce() -> String>(
+    store: &SharedThumbs,
+    jobs: impl Iterator<Item = (&'a str, F)>,
+    side: u32,
+    cx: &mut App,
+) {
+    {
+        let mut s = store.borrow_mut();
+        if s.held() || s.queue.iter().any(|j| !j.low) {
+            return;
+        }
+        let frame = s.frame;
+        let mut key = String::new();
+        for (id, url) in jobs {
+            key.clear();
+            key.push_str("t:");
+            key.push_str(id);
+            if s.images.get(&key).is_some_and(|e| enough(e.side, side)) {
+                continue;
+            }
+            if let Some(r) = s.running.get_mut(&key) {
+                r.frame = frame;
+                continue;
+            }
+            if let Some(job) = s.queue.iter_mut().find(|j| j.key == key) {
+                job.frame = frame;
+                job.side = bigger(job.side, side);
+                continue;
+            }
+            if s.failed.contains_key(&key) {
+                continue;
+            }
+            s.seq += 1;
+            let job = Job { key: key.clone(), url: url(), side, frame, seq: s.seq, low: true };
+            s.queue.push(job);
+        }
+    }
+    pump(store, cx);
 }
 
 /// Notifies the view after a moment, so the loads held back during a fling start once it slowed down.
@@ -355,8 +414,8 @@ fn pump(store: &SharedThumbs, cx: &mut App) {
             }
             let frame = s.frame;
             s.queue.retain(|j| j.frame + STALE_FRAMES >= frame);
-            // Newest frame first (what the user is looking at now), then request order.
-            let next = s.queue.iter().enumerate().max_by_key(|(_, j)| (j.frame, std::cmp::Reverse(j.seq))).map(|(i, _)| i);
+            // Visible requests before prefetch, then newest frame first (what the user is looking at now), then request order.
+            let next = s.queue.iter().enumerate().max_by_key(|(_, j)| (!j.low, j.frame, std::cmp::Reverse(j.seq))).map(|(i, _)| i);
             let Some(index) = next else { return };
             let job = s.queue.swap_remove(index);
             let cancel = Cancel::new();
@@ -376,7 +435,12 @@ fn pump(store: &SharedThumbs, cx: &mut App) {
         cx.spawn(async move |cx| {
             let result = load(&store, &job, local, cached, &cancel).await;
             let (result, fresh) = match result {
-                Ok((decoded, fresh)) => (Ok(decoded), fresh),
+                Ok((decoded, fresh)) => {
+                    // The per-pixel BGRA swap runs on a worker (on the main thread when there are none).
+                    let bytes = (decoded.width * decoded.height * 4) as usize;
+                    let image = cx.background_spawn(async move { render_image(decoded.width, decoded.height, decoded.rgba) }).await;
+                    (image.map(|i| (i, bytes)).ok_or_else(|| "bad image".to_string()), fresh)
+                }
                 Err(e) => (Err(e), None),
             };
             let _ = cx.update(|app| finish(&store, &job.key, job.side, result, &cancel, app));
@@ -471,19 +535,16 @@ pub(super) fn clear_cache(store: &SharedThumbs) {
     store.borrow_mut().cache = CacheIndex::default();
 }
 
-fn finish(store: &SharedThumbs, key: &str, side: u32, result: Result<Decoded, String>, cancel: &Cancel, cx: &mut App) {
+fn finish(store: &SharedThumbs, key: &str, side: u32, result: Result<(Arc<RenderImage>, usize), String>, cancel: &Cancel, cx: &mut App) {
     let view = {
         let mut s = store.borrow_mut();
         s.active -= 1;
         s.running.remove(key);
         match result {
-            Ok(d) => match render_image(d.width, d.height, d.rgba) {
-                Some(image) => {
-                    s.failed.remove(key);
-                    s.insert(key.to_string(), image, (d.width * d.height * 4) as usize, side)
-                }
-                None => s.fail(key),
-            },
+            Ok((image, bytes)) => {
+                s.failed.remove(key);
+                s.insert(key.to_string(), image, bytes, side);
+            }
             // An aborted load is not a failure: the tile is simply asked for again if it comes back.
             Err(_) if cancel.is_cancelled() => {}
             Err(_) => s.fail(key),

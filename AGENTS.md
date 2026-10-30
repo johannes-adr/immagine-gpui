@@ -155,6 +155,8 @@ Porting Robin's Immagine (`../immagine`, Swift/iOS, clone of github.com/RobinCod
 - Load order: downloaded asset (`downloads` db) -> persistent cache db `thumb-cache` (`THUMB_CACHE_DB`, encoded WebP bytes, key `t:<id>:<url-encoded thumbhash>`, ~10 KB each, capped at 40 000 entries oldest-inserted first, key index kept in memory from `blob_keys` at start, cleared at logout and by the settings row) -> network (`Host::fetch_image(url, &Cancel)`). Same code on desktop (files) and web (IndexedDB). Verified: a reload of the grid makes zero thumbnail requests.
 - Thumbnail URLs come from `thumbs::thumb_url` and carry `&c=<thumbhash>` like Immich's web client, so an edited photo gets a new URL and cache key.
 - `photo_grid` reports the scroll offset each frame (`track_scroll`, not while zooming). Above 3 pt/ms no new loads start (tiles show their thumbhash); a 150 ms wake-up re-renders so loads start once the fling slows or stops dead.
+- Prefetch: while nothing visible waits, `photo_grid` hands the next screenful of rows in the scroll direction to `thumbs::prefetch` (low-priority jobs; a visible request promotes them). At the end of the timeline, where it opens, the rows above are warmed.
+- The RGBA->BGRA swap and `RenderImage` construction run in `background_spawn` (`pump`), only the atlas insert stays on the main thread.
 - Running `t:` loads not asked for in `STALE_FRAMES` frames are aborted (`host::Cancel`; web: `AbortController`, desktop cannot abort ureq and only skips the decode). Previews/full sizes are never aborted.
 - `serve.py` sends `no-store` only for non-`/api/` paths (Immich's own `private, max-age=86400` reaches the browser) and keeps proxied responses with a length on a keep-alive HTTP/1.1 connection.
 

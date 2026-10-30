@@ -285,7 +285,8 @@ impl Immagine {
             for evicted in store.borrow_mut().take_evicted() {
                 let _ = window.drop_image(evicted);
             }
-            range
+            let (range_start, range_end) = (range.start, range.end);
+            let built: Vec<AnyElement> = range
                 .map(|row| {
                     if row < top_rows || row >= top_rows + rows {
                         return div().h(px(row_h)).into_any_element();
@@ -405,7 +406,26 @@ impl Immagine {
                         }))
                         .into_any_element()
                 })
-                .collect()
+                .collect();
+            if timeline && !zooming && !items.is_empty() {
+                // Idle: warm the next screenful of rows in the scroll direction (low priority, see `thumbs::prefetch`).
+                let span = range_end.saturating_sub(range_start).max(1);
+                // At the end of the timeline (where it opens) there is nothing below, so the rows above are warmed.
+                let at_end = range_end.saturating_sub(top_rows) >= rows;
+                let (from, to) = if store.borrow().moving_up() || at_end {
+                    ((range_start.saturating_sub(top_rows)).saturating_sub(span), range_start.saturating_sub(top_rows))
+                } else {
+                    let after = range_end.saturating_sub(top_rows);
+                    (after, after + span)
+                };
+                let (from, to) = ((from * columns).min(items.len()), (to * columns).min(items.len()));
+                let origin = &origin;
+                let jobs = items[from..to]
+                    .iter()
+                    .map(|item| (item.id.as_str(), move || thumbs::thumb_url(origin, &item.id, "thumbnail", item.thumbhash.as_deref())));
+                thumbs::prefetch(&store, jobs, side, cx);
+            }
+            built
         })
         .size_full();
         let (handle, placed) = scroll;
