@@ -48,6 +48,10 @@ pub(super) enum Glyph {
     Downloaded,
     Play,
     Pause,
+    AddToAlbum,
+    Check,
+    /// The jobs list: arrow into a tray beside list lines.
+    Jobs,
 }
 
 /// A `Glyph` of `size` px, stroked in `color`.
@@ -139,6 +143,23 @@ pub(super) fn glyph(kind: Glyph, size: f32, color: Rgba) -> Canvas<()> {
                         stroke(&[(6.5, 9.5), (10.8, 14.), (17.5, 4.5)], window);
                     }
                 }
+                Glyph::AddToAlbum => {
+                    stroke(&[(6., 3.5), (18., 3.5)], window);
+                    stroke(&[(3.5, 7.), (20.5, 7.), (20.5, 20.5), (3.5, 20.5), (3.5, 7.)], window);
+                    stroke(&[(12., 10.5), (12., 17.)], window);
+                    stroke(&[(8.7, 13.75), (15.3, 13.75)], window);
+                }
+                Glyph::Jobs => {
+                    for y in [5., 12., 19.] {
+                        stroke(&[(3., y), (4.2, y)], window);
+                    }
+                    stroke(&[(8., 5.), (21., 5.)], window);
+                    stroke(&[(8., 12.), (13., 12.)], window);
+                    stroke(&[(8., 19.), (13., 19.)], window);
+                    stroke(&[(18., 9.5), (18., 20.)], window);
+                    stroke(&[(15., 17.), (18., 20.), (21., 17.)], window);
+                }
+                Glyph::Check => stroke(&[(5., 12.5), (10., 17.5), (19., 7.)], window),
                 Glyph::Trash => {
                     stroke(&[(3.5, 6.), (20.5, 6.)], window);
                     stroke(&[(9., 6.), (9., 3.), (15., 3.), (15., 6.)], window);

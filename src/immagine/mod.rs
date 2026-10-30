@@ -11,6 +11,8 @@ mod range_views;
 mod slider;
 mod icons;
 mod search;
+mod selection;
+mod jobs;
 mod settings;
 mod tab_bar;
 mod thumbs;
@@ -33,8 +35,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-const DB: &str = "immagine";
-const SNAPSHOT_KEY: &str = "store";
+pub(super) const DB: &str = "immagine";
+pub(super) const SNAPSHOT_KEY: &str = "store";
 const TOKEN_KEY: &str = "immagine.token";
 /// Persisted debug switch of the settings sheet ("1" = on): shows the FPS badge.
 const DEBUG_KEY: &str = "immagine.debug";
@@ -71,6 +73,7 @@ pub(crate) struct Immagine {
     meter: Rc<FpsMeter>,
     fps: u32,
     worst_ms: u32,
+    albums_repaired: bool,
     debug: bool,
     webgpu: bool,
     tab: usize,
@@ -137,7 +140,9 @@ pub(crate) struct Immagine {
     people: people::PeopleState,
     search: search::SearchState,
     settings: settings::SettingsState,
+    jobs: jobs::JobsState,
     downloads: downloads::Downloads,
+    select: selection::SelectState,
 }
 
 /// The timeline is stored newest first; the grid reads oldest first, so the newest photos sit at the bottom.
@@ -210,6 +215,7 @@ impl Immagine {
             dark,
             meter: Rc::new(FpsMeter::default()),
             fps: 0,
+            albums_repaired: false,
             debug: H::setting_get(DEBUG_KEY).as_deref() == Some("1"),
             worst_ms: 0,
             webgpu,
@@ -257,7 +263,9 @@ impl Immagine {
             people: Default::default(),
             search: Default::default(),
             settings: Default::default(),
+            jobs: Default::default(),
             downloads,
+            select: Default::default(),
         };
         this.resume(cx);
         this.ensure_gestures(cx);
@@ -381,13 +389,16 @@ impl Immagine {
         self.people = Default::default();
         self.search = Default::default();
         self.viewer = None;
+        self.select_end();
         self.settings.sheet.close();
+        self.jobs.reset();
         self.tab = 0;
         self.screen = Screen::Login;
         self.downloads.ids.borrow_mut().clear();
         self.downloads.busy.clear();
         thumbs::clear_cache(&self.thumbs);
         cx.spawn(async move |_, _| {
+            let _ = H::blob_clear(jobs::JOBS_DB).await;
             let _ = H::blob_clear(downloads::DOWNLOAD_DB).await;
             let _ = H::blob_clear(thumbs::THUMB_CACHE_DB).await;
             let _ = H::blob_put(DB, SNAPSHOT_KEY, b"").await;
@@ -422,6 +433,11 @@ impl Immagine {
                     t.albums.refresh(e.store());
                 }
                 t.syncing = false;
+                // Once per launch, after the first sync: fill album links the stream never delivered (see `repair_albums`).
+                if outcome.is_ok() && !std::mem::replace(&mut t.albums_repaired, true) {
+                    let ids = t.albums.album_ids();
+                    t.repair_albums(ids, cx);
+                }
                 match &outcome {
                     Ok(_) => t.status.clear(),
                     Err(ClientError::Unauthorized) => {
@@ -466,7 +482,7 @@ impl Immagine {
     /// The scroll handle of whatever scrolls on screen now, for the rubber band; `None` while the viewer is open
     /// or on screens without a scroll view.
     fn active_scroll(&self) -> Option<ScrollHandle> {
-        if self.screen != Screen::Timeline || self.viewer.as_ref().is_some_and(|v| !v.closing) || self.settings.sheet.visible() {
+        if self.screen != Screen::Timeline || self.viewer.as_ref().is_some_and(|v| !v.closing) || self.settings.sheet.visible() || self.jobs.sheet.visible() {
             return None;
         }
         let list = |h: &UniformListScrollHandle| h.0.borrow().base_handle.clone();
@@ -495,8 +511,12 @@ impl Render for Immagine {
         self.rubber.tick(window);
         self.settings.sheet.tick(window);
         self.settings.rubber.tick(window);
+        self.jobs.sheet.tick(window);
+        self.jobs.rubber.tick(window);
         self.grid_default(window.viewport_size().width.into());
         self.grid_tick(window);
+        self.select_check();
+        self.sel_tick(window);
         let background = if self.dark { rgb(0x000000) } else { rgb(0xffffff) };
         let content = match self.screen {
             Screen::Loading => div().into_any_element(),
@@ -518,12 +538,16 @@ impl Render for Immagine {
         let chrome = (self.screen == Screen::Timeline && !viewer_open).then(|| {
             if searching {
                 vec![self.search_bar(&p, window, cx)]
+            } else if self.select.on {
+                vec![self.sel_toolbar(&p, cx)]
             } else {
                 self.bars(&p, window, cx)
             }
         });
         let viewer = if self.screen == Screen::Timeline { self.viewer_overlay(window, cx) } else { None };
+        let select_overlay = if self.screen == Screen::Timeline && self.select.on { self.sel_overlay(&p, cx) } else { None };
         let settings = if self.screen == Screen::Timeline { self.settings_overlay(&p, window, cx) } else { None };
+        let jobs = if self.screen == Screen::Timeline { self.jobs_overlay(&p, window, cx) } else { None };
         div()
             .size_full()
             .relative()
@@ -532,15 +556,27 @@ impl Render for Immagine {
             .text_color(p.label)
             .child(content)
             .child(self.grid_input(cx))
+            .child(self.sel_input(cx))
             .child(rubber_band::input(cx.weak_entity(), |this, dy, phase, window| {
                 // While the grid zooms, the first finger of the pinch must not also scroll the list or start a fling.
                 if this.grid_zooming() {
                     window.cancel_touch_momentum();
                     return (true, false);
                 }
+                // Swipe-to-select: the finger paints, the list must not scroll along (it auto-scrolls itself).
+                if this.select.painting() {
+                    window.cancel_touch_momentum();
+                    return (true, false);
+                }
+                if this.select.overlay_open() {
+                    return (false, false);
+                }
                 // The settings sheet covers the page: its list takes the gesture, with its own band.
                 if this.settings.sheet.visible() {
                     return this.settings_scroll_event(dy, phase, window);
+                }
+                if this.jobs.sheet.visible() {
+                    return this.jobs_scroll_event(dy, phase, window);
                 }
                 let scroll = this.active_scroll();
                 this.rubber.event(dy, phase, scroll.as_ref(), window)
@@ -551,7 +587,9 @@ impl Render for Immagine {
             .child(div().absolute().top_0().left_0().size_full().bg(rgba(0x00000001)))
             .children(viewer)
             .children(chrome.into_iter().flatten())
+            .children(select_overlay)
             .children(settings)
+            .children(jobs)
             .children(self.debug.then(|| fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, self.webgpu)))
     }
 }

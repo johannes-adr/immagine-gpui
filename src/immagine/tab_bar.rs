@@ -80,7 +80,7 @@ impl Immagine {
     /// Swaps the tab bar for the Jahre / Monate / Alle bar when the timeline is scrolled away from the newest
     /// photos, and back when it is at the bottom again.
     pub(super) fn sync_range_bar(&mut self, viewer_open: bool, cx: &mut Context<Self>) {
-        if viewer_open {
+        if viewer_open || self.select.on {
             return;
         }
         let want = if self.tab != 0 || self.screen != Screen::Timeline {

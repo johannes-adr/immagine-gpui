@@ -45,7 +45,7 @@ fn usage_text(u: Option<Usage>) -> String {
 }
 
 /// 1 536 -> "1,5 KB".
-fn size(n: u64) -> String {
+pub(super) fn size(n: u64) -> String {
     let n = n as f64;
     let (value, unit) = if n < 1024. {
         return format!("{} B", n as u64);

@@ -3,6 +3,8 @@
 
 use super::{thumbs, Immagine};
 use crate::components::glass::glass_div;
+use crate::host::{Current as H, Host};
+use crate::logic::client::ImmichClient;
 use crate::logic::models::album::Album;
 use crate::logic::models::album_tree::{AlbumPath, AlbumTree};
 use crate::logic::models::timeline::TimelineItem;
@@ -50,6 +52,10 @@ impl AlbumsState {
     /// Scroll handle of the open album page's photo list.
     pub(super) fn open_scroll(&self) -> Option<&UniformListScrollHandle> {
         self.open.as_ref().map(|o| &o.scroll)
+    }
+
+    pub(super) fn album_ids(&self) -> Vec<String> {
+        self.albums.iter().map(|a| a.id.clone()).collect()
     }
 
     /// Called after every sync and after the first load; copy what the view needs out of the store.
@@ -148,6 +154,62 @@ impl Immagine {
         let items = Rc::new(newest_first(engine.store().album_assets(id)));
         self.albums.open = Some(OpenAlbum { id: id.to_string(), name, items, scroll: UniformListScrollHandle::new() });
         cx.notify();
+        self.repair_albums(vec![id.to_string()], cx);
+    }
+
+    /// Self-heal for a store whose album links are missing (a client that synced before link events were handled
+    /// never gets them again: its stream checkpoint is past them). Lists the albums on the server and adds the links
+    /// the store lacks; additive, so links of archived or trashed photos stay. Refreshes the view once at the end.
+    pub(super) fn repair_albums(&mut self, ids: Vec<String>, cx: &mut Context<Self>) {
+        let (origin, token) = (self.origin.clone(), self.token.clone());
+        cx.spawn(async move |this, cx| {
+            let Ok(client) = ImmichClient::new(&origin, H::transport()) else { return };
+            let mut changed = false;
+            for id in ids {
+                let mut listed: Vec<String> = Vec::new();
+                let mut complete = true;
+                for page in 1..=100u32 {
+                    let Ok(answer) = client.album_assets(&id, page, 1000, &token).await else {
+                        complete = false;
+                        break;
+                    };
+                    let got = answer.assets.items.len();
+                    listed.extend(answer.assets.items.into_iter().map(|a| a.id));
+                    if answer.assets.next_page.is_none() || got == 0 {
+                        break;
+                    }
+                }
+                if !complete && listed.is_empty() {
+                    continue;
+                }
+                let Ok(grew) = this.update(cx, |t, _| {
+                    use crate::logic::store::Store;
+                    let Some(engine) = t.engine.as_mut() else { return false };
+                    let before = engine.store().album_visible_counts().get(&id).copied().unwrap_or(0);
+                    engine.store_mut().add_album_assets(&id, &listed);
+                    engine.store().album_visible_counts().get(&id).copied().unwrap_or(0) != before
+                }) else {
+                    return;
+                };
+                changed |= grew;
+            }
+            if !changed {
+                return;
+            }
+            let _ = this.update(cx, |t, cx| {
+                let Some(engine) = t.engine.as_ref() else { return };
+                t.albums.refresh(engine.store());
+                let snapshot = engine.store().snapshot().ok();
+                cx.notify();
+                if let Some(bytes) = snapshot {
+                    cx.spawn(async move |_, _| {
+                        let _ = H::blob_put(super::DB, super::SNAPSHOT_KEY, &bytes).await;
+                    })
+                    .detach();
+                }
+            });
+        })
+        .detach();
     }
 
     fn close_album(&mut self, cx: &mut Context<Self>) {
@@ -334,6 +396,7 @@ impl Immagine {
                     .justify_between()
                     .gap_3()
                     .child(div().flex_1().min_w_0().text_size(px(34.)).font_weight(FontWeight::BOLD).truncate().child(title))
+                    .child(self.jobs_button(p, cx))
                     .child(
                         glass_div(p.glass_tint, 18.)
                             .id("albums-settings")

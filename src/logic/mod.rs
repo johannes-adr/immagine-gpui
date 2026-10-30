@@ -9,6 +9,7 @@ pub mod crop_geometry;
 pub mod display_image;
 pub mod grid;
 pub mod iso_date;
+pub mod jobs;
 pub mod json;
 pub mod media_duration;
 pub mod models;

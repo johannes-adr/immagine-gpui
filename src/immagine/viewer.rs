@@ -476,6 +476,9 @@ impl Immagine {
         if self.settings.sheet.visible() {
             return self.settings_pinch(event, cx);
         }
+        if self.jobs.sheet.visible() {
+            return self.jobs_pinch(event, cx);
+        }
         if self.viewer.is_none() {
             return self.grid_pinch(event, cx);
         }

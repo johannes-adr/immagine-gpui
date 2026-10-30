@@ -2,6 +2,7 @@
 
 use super::{thumbs, Immagine, Screen};
 use crate::host::Pinch;
+use crate::logic::grid::hit::HitGeom;
 use crate::logic::grid::layout::ZOOM_LEVELS;
 use crate::components::glass::glass_blur;
 use crate::theme::Palette;
@@ -27,7 +28,7 @@ fn month_of(item: &TimelineItem) -> Option<(i32, u32)> {
 }
 
 impl Immagine {
-    fn grid_active(&self) -> bool {
+    pub(super) fn grid_active(&self) -> bool {
         self.screen == Screen::Timeline && self.tab == 0 && self.range_mode == 2 && !self.search.open && self.viewer.is_none()
     }
 
@@ -43,10 +44,13 @@ impl Immagine {
             return;
         }
         match event {
-            Pinch::Begin => self.grid_begin(),
+            Pinch::Begin => {
+                self.sel_cancel_touch(cx);
+                self.grid_begin()
+            }
             Pinch::Move { ratio, .. } => self.grid_apply(ratio, cx),
             Pinch::End => self.grid_release(cx),
-            _ => {}
+            Pinch::Down { .. } | Pinch::Drag { .. } | Pinch::Up { .. } => self.sel_touch(event, cx),
         }
     }
 
@@ -249,6 +253,9 @@ impl Immagine {
         let items_empty = items.is_empty();
         let footer = self.bottom.max(10.) + 76.;
         let downloaded = self.downloads.ids.clone();
+        let selecting = timeline && self.select.on;
+        let sel_ids = self.select.ids.clone();
+        let count = items.len();
 
         let origin = self.origin.clone();
         let placeholder = p.chip;
@@ -308,6 +315,8 @@ impl Immagine {
                         };
                         // Videos show their length at the bottom right (not in the tiniest cells).
                         let badge = item.duration.clone().filter(|_| item.is_video() && cell >= 40.);
+                        let selected = selecting && sel_ids.borrow().contains(&item.id);
+                        let tap_id = item.id.clone();
                         div()
                             .id((id, idx))
                             .relative()
@@ -317,6 +326,7 @@ impl Immagine {
                             .when(!hidden, |d| d.bg(placeholder))
                             .overflow_hidden()
                             .children(picture.filter(|_| !hidden).map(|image| img(image).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Cover)))
+                            .children((selected && !hidden).then(|| div().absolute().top_0().left_0().size_full().bg(rgba(0xffffff5c))))
                             .children((!hidden && cell >= 40.).then(|| {
                                 // Bottom row: a white heart at the left for favorites; at the right the video's length and a
                                 // tiny mark for photos kept in IndexedDB.
@@ -325,7 +335,7 @@ impl Immagine {
                                 div()
                                     .absolute()
                                     .left(px(4.))
-                                    .right(px(4.))
+                                    .right(px(if selecting { 4. + icon * 1.9 } else { 4. }))
                                     .bottom(px(4.))
                                     .flex()
                                     .flex_row()
@@ -351,6 +361,16 @@ impl Immagine {
                                             .children(stored.then(|| super::icons::glyph(super::icons::Glyph::Downloaded, icon, rgb(0xffffff).into()))),
                                     )
                             }))
+                            .children((selecting && !hidden && cell >= 24.).then(|| {
+                                // iOS select mode: a ring on every tile, a blue disc with a check on selected ones.
+                                let d = if cell < 60. { 16. } else { 22. };
+                                let mark = div().absolute().right(px(4.)).bottom(px(4.)).size(px(d)).rounded_full().border_2().flex().items_center().justify_center();
+                                if selected {
+                                    mark.bg(rgb(crate::theme::BLUE)).border_color(rgb(0xffffff)).child(super::icons::glyph(super::icons::Glyph::Check, d * 0.62, rgb(0xffffff).into()))
+                                } else {
+                                    mark.border_color(rgba(0xffffffe6)).bg(rgba(0x00000026))
+                                }
+                            }))
                             .child(
                                 canvas(
                                     move |bounds, _, _| {
@@ -370,7 +390,14 @@ impl Immagine {
                                 if window.tap_caught_fling() {
                                     return;
                                 }
-                                view.update(cx, |this, cx| this.open_viewer(all.clone(), idx, cx)).ok();
+                                view.update(cx, |this, cx| {
+                                    if selecting {
+                                        this.select_tap(&tap_id, cx)
+                                    } else {
+                                        this.open_viewer(all.clone(), idx, cx)
+                                    }
+                                })
+                                .ok();
                             })
                     });
                     // At the smallest cells a label names the month that starts in this row.
@@ -438,6 +465,9 @@ impl Immagine {
         }
         if placed.is_some() {
             let vh: f32 = window.viewport_size().height.into();
+            // Where swipe-to-select finds the tiles (see `selection.rs`).
+            self.select.geom.set(HitGeom { width: vw, count, columns, cell, gap, top_rows, top: shift_top + self.rubber.value() });
+            self.select.edges.set((lead, vh - (self.bottom.max(10.) + 70.)));
             let mid = vh / 2. - shift_top;
             self.grid_geom.set((row_h, top_rows, mid));
             if self.grid_zooming() {
@@ -525,6 +555,7 @@ impl Immagine {
                                     .child(div().text_size(px(34.)).font_weight(FontWeight::BOLD).child("Mediathek"))
                                     .child(div().text_size(px(15.)).text_color(p.secondary).child(subtitle)),
                             )
+                            .children((!self.items.is_empty()).then(|| self.sel_header_button(p, cx)))
                     ),
             )
     }
