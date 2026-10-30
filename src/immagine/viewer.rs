@@ -769,8 +769,8 @@ fn heart(filled: bool, k: f32) -> Canvas<()> {
         |_, _, _| {},
         move |bounds, _, window, _| {
             let (x, y): (f32, f32) = (bounds.origin.x.into(), bounds.origin.y.into());
-            let k = f32::from(bounds.size.width) / 24.;
-            let at = |px_: f32, py_: f32| point(px(x + px_ * k), px(y + py_ * k));
+            let scale = f32::from(bounds.size.width) / 24.;
+            let at = |px_: f32, py_: f32| point(px(x + px_ * scale), px(y + py_ * scale));
             let mut b = if filled { PathBuilder::fill() } else { PathBuilder::stroke(px(1.8)) };
             b.move_to(at(12., 21.5));
             b.curve_to(at(2.2, 8.2), at(2., 14.5));
