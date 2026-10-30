@@ -297,6 +297,8 @@ impl Immagine {
                             (None, Some(hash)) => thumbs::placeholder(&store, &item.id, hash),
                             (None, None) => None,
                         };
+                        // Videos show their length at the bottom right (not in the tiniest cells).
+                        let badge = item.duration.clone().filter(|_| item.is_video() && cell >= 40.);
                         div()
                             .id((id, idx))
                             .relative()
@@ -306,6 +308,19 @@ impl Immagine {
                             .when(!hidden, |d| d.bg(placeholder))
                             .overflow_hidden()
                             .children(picture.filter(|_| !hidden).map(|image| img(image).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Cover)))
+                            .children(badge.filter(|_| !hidden).map(|text| {
+                                div()
+                                    .absolute()
+                                    .right(px(4.))
+                                    .bottom(px(4.))
+                                    .px(px(5.))
+                                    .py(px(1.))
+                                    .rounded(px(8.))
+                                    .bg(rgba(0x00000066))
+                                    .text_color(rgb(0xffffff))
+                                    .text_size(px(if cell < 90. { 10. } else { 12. }))
+                                    .child(text)
+                            }))
                             .child(
                                 canvas(
                                     move |bounds, _, _| {

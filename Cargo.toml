@@ -12,6 +12,7 @@ gpui-kit = { version = "0.8.1", default-features = false, features = ["component
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 image = { version = "0.25", default-features = false }
+mp4 = "0.14"
 
 [dev-dependencies]
 futures-lite = "2"
@@ -23,9 +24,10 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "Window", "Request", "RequestInit", "RequestCredentials", "Response", "Headers", "Event", "EventTarget",
     "Location", "Storage", "console", "Performance", "ImageBitmap", "OffscreenCanvas",
-    "OffscreenCanvasRenderingContext2d", "ImageData", "Blob", "PointerEvent", "MouseEvent", "Document", "HtmlElement", "HtmlVideoElement",
+    "OffscreenCanvasRenderingContext2d", "ImageData", "Blob", "PointerEvent", "MouseEvent", "Document", "HtmlElement",
     "CssStyleDeclaration", "Node", "Element", "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbTransaction", "IdbTransactionMode",
     "IdbOpenDbRequest", "IdbRequest", "Url",
+    "Navigator", "AudioContext", "AudioContextState", "AudioDestinationNode", "AudioNode", "AudioBuffer", "AudioBufferSourceNode", "BaseAudioContext",
 ] }
 
 # Desktop host (src/host/desktop): blocking HTTP on worker threads, image codecs, a oneshot to hand results back.

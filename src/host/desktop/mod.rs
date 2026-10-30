@@ -3,7 +3,7 @@
 //! * HTTP: `ureq` on a worker thread per request, one shared agent so the Immich cookie persists.
 //! * Persistence: plain files below [`data_dir`].
 //! * Images: downloaded and decoded with the `image` crate on a worker thread.
-//! * No DOM, so no video element and no touch-gesture source: `show_video` and `install_gestures`
+//! * No video decoder, no audio output and no touch-gesture source: `video_decoder`, `audio_output` and `install_gestures`
 //!   return `None` (mouse and trackpad input arrive through GPUI itself).
 
 mod blocking;
@@ -11,7 +11,7 @@ pub mod entry;
 mod http;
 mod store;
 
-use crate::host::{Decoded, Host, Pinch};
+use crate::host::{AudioConfig, AudioOutput, Chunk, Decoded, Host, Pinch, VideoConfig, VideoDecode};
 use crate::logic::ports::Clock;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -39,7 +39,8 @@ fn server_origin() -> String {
 impl Host for Desktop {
     type Transport = http::UreqTransport;
     type Clock = SystemTimeClock;
-    type Video = std::convert::Infallible;
+    type VideoDecoder = NoVideoDecoder;
+    type AudioOut = NoAudioOut;
     type Gestures = std::convert::Infallible;
 
     fn transport() -> Self::Transport {
@@ -114,11 +115,76 @@ impl Host for Desktop {
         Err("Teilen wird auf dem Desktop nicht unterstützt".into())
     }
 
-    fn show_video(_url: &str, _top: f32, _bottom: f32) -> Option<Self::Video> {
+    async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+        let url = url.to_string();
+        blocking::run(move || http::get_bytes(&url)).await
+    }
+
+    async fn fetch_range(url: &str, start: u64, end_inclusive: u64) -> Result<crate::host::RangeResponse, String> {
+        let url = url.to_string();
+        blocking::run(move || http::get_range(&url, start, end_inclusive)).await
+    }
+
+    fn video_decoder(_config: VideoConfig, _on_frame: impl Fn(i64, Decoded) + 'static) -> Option<Self::VideoDecoder> {
+        None
+    }
+
+    fn audio_output() -> Option<Self::AudioOut> {
         None
     }
 
     fn install_gestures(_on_event: impl Fn(Pinch) + 'static) -> Option<Self::Gestures> {
         None
+    }
+}
+
+// There is no decoder on the desktop yet (`video_decoder`/`audio_output` return `None`), so these are never built.
+/// Uninhabited: the desktop has no video decoder.
+pub enum NoVideoDecoder {}
+/// Uninhabited: the desktop has no audio output.
+pub enum NoAudioOut {}
+
+impl VideoDecode for NoVideoDecoder {
+    fn decode(&self, _: &Chunk) {
+        match *self {}
+    }
+    fn queue_len(&self) -> u32 {
+        match *self {}
+    }
+    fn reset(&self) {
+        match *self {}
+    }
+    fn flush(&self) {
+        match *self {}
+    }
+    fn error(&self) -> Option<String> {
+        match *self {}
+    }
+}
+
+impl AudioOutput for NoAudioOut {
+    fn configure(&self, _: AudioConfig) -> bool {
+        match *self {}
+    }
+    fn decode(&self, _: &Chunk) {
+        match *self {}
+    }
+    fn queue_len(&self) -> u32 {
+        match *self {}
+    }
+    fn reset(&self) {
+        match *self {}
+    }
+    fn flush(&self) {
+        match *self {}
+    }
+    fn start_clock(&self, _: i64) {
+        match *self {}
+    }
+    fn clock_us(&self) -> Option<i64> {
+        match *self {}
+    }
+    fn set_paused(&self, _: bool) {
+        match *self {}
     }
 }

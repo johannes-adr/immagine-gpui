@@ -43,6 +43,8 @@ pub(super) enum Glyph {
     Trash,
     Search,
     Close,
+    Play,
+    Pause,
 }
 
 /// A `Glyph` of `size` px, stroked in `color`.
@@ -58,6 +60,16 @@ pub(super) fn glyph(kind: Glyph, size: f32, color: Rgba) -> Canvas<()> {
                 for (i, (a, c)) in pts.iter().enumerate() {
                     if i == 0 { b.move_to(at(*a, *c)) } else { b.line_to(at(*a, *c)) }
                 }
+                if let Ok(path) = b.build() {
+                    window.paint_path(path, color);
+                }
+            };
+            let fill = |pts: &[(f32, f32)], window: &mut Window| {
+                let mut b = PathBuilder::fill();
+                for (i, (a, c)) in pts.iter().enumerate() {
+                    if i == 0 { b.move_to(at(*a, *c)) } else { b.line_to(at(*a, *c)) }
+                }
+                b.close();
                 if let Ok(path) = b.build() {
                     window.paint_path(path, color);
                 }
@@ -93,6 +105,11 @@ pub(super) fn glyph(kind: Glyph, size: f32, color: Rgba) -> Canvas<()> {
                 Glyph::Search => {
                     stroke(&circle(10.5, 10.5, 6.8), window);
                     stroke(&[(15.5, 15.5), (21., 21.)], window);
+                }
+                Glyph::Play => fill(&[(7., 4.), (20., 12.), (7., 20.)], window),
+                Glyph::Pause => {
+                    fill(&[(6., 4.), (10., 4.), (10., 20.), (6., 20.)], window);
+                    fill(&[(14., 4.), (18., 4.), (18., 20.), (14., 20.)], window);
                 }
                 Glyph::Close => {
                     stroke(&[(5., 5.), (19., 19.)], window);

@@ -1,16 +1,16 @@
 //! Browser implementation of [`crate::host::Host`]: `fetch`, IndexedDB, `localStorage`, `createImageBitmap`,
-//! a DOM `<video>` and pointer events. Everything here is wasm-only.
+//! WebCodecs/WebAudio for video and pointer events. Everything here is wasm-only.
 
 pub mod entry;
+pub mod codecs;
 pub mod fetch;
 pub mod idb;
 pub mod image_loader;
 pub mod local_storage;
 pub mod pinch;
 pub mod selftest;
-pub mod video;
 
-use crate::host::{Decoded, Host, Pinch};
+use crate::host::{Decoded, Host, Pinch, VideoConfig};
 
 /// `Date.now()` as the logic layer's clock.
 pub struct WebClock;
@@ -55,7 +55,8 @@ pub struct Web;
 impl Host for Web {
     type Transport = fetch::FetchTransport;
     type Clock = WebClock;
-    type Video = video::VideoHandle;
+    type VideoDecoder = codecs::WebVideoDecoder;
+    type AudioOut = codecs::WebAudioOut;
     type Gestures = pinch::PinchHandle;
 
     fn transport() -> Self::Transport {
@@ -118,8 +119,20 @@ impl Host for Web {
         wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(promise)).await.map(|_| ()).map_err(|e| format!("{e:?}"))
     }
 
-    fn show_video(url: &str, top: f32, bottom: f32) -> Option<Self::Video> {
-        video::show(url, top, bottom)
+    async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+        fetch::bytes(url).await
+    }
+
+    async fn fetch_range(url: &str, start: u64, end_inclusive: u64) -> Result<crate::host::RangeResponse, String> {
+        fetch::range(url, start, end_inclusive).await
+    }
+
+    fn video_decoder(config: VideoConfig, on_frame: impl Fn(i64, Decoded) + 'static) -> Option<Self::VideoDecoder> {
+        codecs::WebVideoDecoder::new(config, on_frame)
+    }
+
+    fn audio_output() -> Option<Self::AudioOut> {
+        codecs::WebAudioOut::new()
     }
 
     fn install_gestures(on_event: impl Fn(Pinch) + 'static) -> Option<Self::Gestures> {

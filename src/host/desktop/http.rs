@@ -70,3 +70,20 @@ pub fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
     }
     Ok(body)
 }
+
+/// Blocking `Range` GET (see `Host::fetch_range`). Called on a worker thread.
+pub fn get_range(url: &str, start: u64, end_inclusive: u64) -> Result<crate::host::RangeResponse, String> {
+    let mut call = agent().get(url).set("Range", &format!("bytes={start}-{end_inclusive}"));
+    if let Some(token) = super::store::setting_get(TOKEN_KEY) {
+        call = call.set("Authorization", &format!("Bearer {token}"));
+    }
+    let (status, headers, bytes) = into_response(call.call())?;
+    match status {
+        206 => {
+            let total = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("content-range")).and_then(|(_, v)| crate::host::content_range_total(v));
+            Ok(crate::host::RangeResponse { bytes, total, partial: true })
+        }
+        200 => Ok(crate::host::RangeResponse { total: Some(bytes.len() as u64), bytes, partial: false }),
+        other => Err(format!("HTTP {other}")),
+    }
+}

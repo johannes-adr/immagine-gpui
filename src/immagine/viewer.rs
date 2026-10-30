@@ -16,9 +16,10 @@ use crate::logic::models::asset_info::AssetInfoFormat;
 use crate::logic::models::timeline::TimelineItem;
 use crate::theme::{BLUE, RED};
 use crate::util::{anim, lerp, now_ms};
-use crate::host::{Current as H, Host, Pinch, VideoHandle};
+use super::video_player::{fmt_time, Player, Status};
+use crate::host::{Current as H, Host, Pinch};
 use gpui_kit::*;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -132,7 +133,11 @@ pub(super) struct Viewer {
     viewport: Cell<(f32, f32)>,
     info: bool,
     details: Option<Rc<Asset>>,
-    video: Option<VideoHandle>,
+    /// The native player while a video plays (see `video_player`).
+    video: Option<Rc<RefCell<Player>>>,
+    /// Left, top, width and height (px) of the scrubber's track, measured by the last render, and the fraction under the finger.
+    scrub_track: Rc<Cell<(f32, f32, f32, f32)>>,
+    scrub_frac: f32,
     /// Delete confirmation: when it started morphing and whether it is opening (else closing).
     trash: Option<(f64, bool)>,
     editor: Option<Editor>,
@@ -238,6 +243,8 @@ impl Immagine {
             info: false,
             details: None,
             video: None,
+            scrub_track: Rc::new(Cell::new((0., 0., 1., 0.))),
+            scrub_frac: 0.,
             trash: None,
             editor: None,
         });
@@ -275,6 +282,10 @@ impl Immagine {
     }
 
     fn drag_start(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let (x, y) = xy(at);
+        if self.scrub_hit(x, y) {
+            return self.scrub_down(x, cx);
+        }
         if self.viewer.as_ref().is_some_and(|v| v.editor.is_some()) {
             return self.editor_down(xy(at), cx);
         }
@@ -294,6 +305,9 @@ impl Immagine {
     }
 
     fn drag_move(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.scrub_move(xy(at).0, cx) {
+            return;
+        }
         if self.viewer.as_ref().is_some_and(|v| v.editor.is_some()) {
             return self.editor_move(xy(at), cx);
         }
@@ -328,6 +342,9 @@ impl Immagine {
     }
 
     fn drag_end(&mut self, width: f32, cx: &mut Context<Self>) {
+        if self.scrub_up(cx) {
+            return;
+        }
         if let Some(ed) = self.viewer.as_mut().and_then(|v| v.editor.as_mut()) {
             ed.grab = None;
             cx.notify();
@@ -765,13 +782,91 @@ impl Immagine {
     }
 
     fn play_video(&mut self, cx: &mut Context<Self>) {
-        let top = self.top.max(12.) + 52.;
         let origin = self.origin.clone();
         let Some(v) = self.viewer.as_mut().filter(|v| !v.closing) else { return };
         let Some(item) = v.items.get(v.index).filter(|i| i.is_video()) else { return };
         let url = format!("{origin}/api/assets/{}/video/playback", item.id);
-        v.video = H::show_video(&url, top, 110.);
+        v.video = Some(Rc::new(RefCell::new(Player::open(url, cx))));
         cx.notify();
+    }
+
+    /// Whether a press at (`x`, `y`) lands on the visible scrubber (its track plus some slop around it).
+    fn scrub_hit(&self, x: f32, y: f32) -> bool {
+        let Some(v) = self.viewer.as_ref().filter(|v| !v.closing && v.chrome_vis(now_ms()) > 0.5) else { return false };
+        let ready = v.video.as_ref().is_some_and(|p| p.borrow().status == Status::Ready);
+        let (left, top, width, height) = v.scrub_track.get();
+        ready && x >= left - 12. && x <= left + width + 12. && y >= top - 12. && y <= top + height + 12.
+    }
+
+    /// A finger went down on the scrubber at `x`.
+    fn scrub_down(&mut self, x: f32, cx: &mut Context<Self>) {
+        let Some(v) = self.viewer.as_mut() else { return };
+        let Some(player) = v.video.clone() else { return };
+        let (left, _, width, _) = v.scrub_track.get();
+        v.scrub_frac = ((x - left) / width.max(1.)).clamp(0., 1.);
+        let mut p = player.borrow_mut();
+        p.scrub_begin();
+        p.scrub_to(v.scrub_frac);
+        cx.notify();
+    }
+
+    /// Whether the scrubber is being dragged; then the pointer belongs to it, not to the page swipe.
+    fn scrub_move(&mut self, x: f32, cx: &mut Context<Self>) -> bool {
+        let Some(v) = self.viewer.as_mut() else { return false };
+        let Some(player) = v.video.clone().filter(|p| p.borrow().scrubbing()) else { return false };
+        let (left, _, width, _) = v.scrub_track.get();
+        v.scrub_frac = ((x - left) / width.max(1.)).clamp(0., 1.);
+        player.borrow_mut().scrub_to(v.scrub_frac);
+        cx.notify();
+        true
+    }
+
+    fn scrub_up(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(v) = self.viewer.as_mut() else { return false };
+        let Some(player) = v.video.clone().filter(|p| p.borrow().scrubbing()) else { return false };
+        player.borrow_mut().scrub_end(v.scrub_frac);
+        cx.notify();
+        true
+    }
+
+    fn toggle_play(&mut self, cx: &mut Context<Self>) {
+        if let Some(player) = self.viewer.as_ref().and_then(|v| v.video.clone()) {
+            player.borrow_mut().toggle_play();
+            cx.notify();
+        }
+    }
+
+    /// Play/pause button, scrubber and times of the native player, in a glass pill above the bottom bar.
+    fn video_controls(&self, player: &Rc<RefCell<Player>>, track: Rc<Cell<(f32, f32, f32, f32)>>, k: f32, bottom: f32, live: bool, cx: &mut Context<Self>) -> AnyElement {
+        let white = Rgba { a: k, ..rgb(0xffffff).into() };
+        let p = player.borrow();
+        let pill = glass_div_with(VIEWER_TINT, 26., k, true).id("viewer-controls").occlude().h(px(52.)).px_4().flex().flex_row().items_center().gap_3().text_color(white).text_size(px(13.));
+        let body = match &p.status {
+            Status::Loading => pill.justify_center().child("Lädt …"),
+            Status::Failed(message) => pill.justify_center().child(message.clone()),
+            Status::Ready => {
+                let fraction = (p.position_us as f32 / p.duration_us.max(1) as f32).clamp(0., 1.);
+                let mut button = div().id("viewer-play-pause").w(px(32.)).h(px(40.)).flex_none().flex().items_center().justify_center().child(super::icons::glyph(
+                    if p.is_playing() { super::icons::Glyph::Pause } else { super::icons::Glyph::Play },
+                    24.,
+                    white,
+                ));
+                if live {
+                    button = button.on_click(cx.listener(|this, _, _, cx| this.toggle_play(cx)));
+                }
+                let bar = div().id("viewer-scrub").flex_1().h(px(40.)).relative().flex().items_center();
+                let bar = bar
+                    .child(canvas(move |bounds, _, _| track.set((bounds.origin.x.into(), bounds.origin.y.into(), bounds.size.width.into(), bounds.size.height.into())), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
+                    .child(div().w_full().h(px(4.)).rounded(px(2.)).bg(Rgba { a: 0.3 * k, ..rgb(0xffffff).into() }))
+                    .child(div().absolute().left_0().h(px(4.)).w(relative(fraction)).rounded(px(2.)).bg(white))
+                    .child(div().absolute().left(relative(fraction)).ml(px(-7.)).w(px(14.)).h(px(14.)).rounded(px(7.)).bg(white));
+                pill.child(button)
+                    .child(div().w(px(44.)).flex_none().child(if p.buffering { "Lädt …".to_string() } else { fmt_time(p.position_us) }))
+                    .child(bar)
+                    .child(div().w(px(40.)).flex_none().text_right().child(fmt_time(p.duration_us)))
+            }
+        };
+        div().absolute().left(px(16.)).right(px(16.)).bottom(px(bottom + 112.)).child(body).into_any_element()
     }
 
     fn info_lines(asset: &Asset) -> Vec<(&'static str, String)> {
@@ -947,6 +1042,18 @@ impl Immagine {
         let count = items.len();
         let current = items.get(index).cloned();
 
+        // The native player advances once per frame while it plays; its current picture goes on top of the page.
+        let (video_frame, controls) = match v.video.clone() {
+            Some(player) => {
+                if player.borrow_mut().tick(window) {
+                    window.request_animation_frame();
+                }
+                let frame = player.borrow().frame();
+                (frame, Some(self.video_controls(&player, v.scrub_track.clone(), k, self.bottom.max(10.), !closing, cx)))
+            }
+            None => (None, None),
+        };
+
         // Decoded images for the visible page and its neighbours (loads are queued by the store).
         let store = self.thumbs.clone();
         store.borrow_mut().begin_frame();
@@ -972,6 +1079,9 @@ impl Immagine {
             for image in layers.iter().flatten() {
                 page = page.child(img(image.clone()).absolute().size_full().object_fit(if cover { ObjectFit::Cover } else { ObjectFit::Contain }));
             }
+            if let Some(frame) = video_frame.clone().filter(|_| k == index) {
+                page = page.child(img(frame).absolute().size_full().object_fit(ObjectFit::Contain));
+            }
             Some(page.into_any_element())
         };
         let aspect = current.as_ref().and_then(|i| i.ratio).filter(|r| *r > 0.).map(|r| r as f32).unwrap_or(vw / vh);
@@ -985,6 +1095,7 @@ impl Immagine {
             let color = Rgba { a: color.a * k, ..color };
             glass_div_with(VIEWER_TINT, 22., k, true)
                 .id(id)
+                .occlude()
                 .h(px(44.))
                 .px_5()
                 .flex()
@@ -1292,6 +1403,7 @@ impl Immagine {
                         .size_full()
                         .child(filmstrip)
                         .child(bar)
+                        .children(controls)
                         .children((is_video && !playing).then(|| {
                             let play = chip("viewer-play", "Abspielen".into(), rgb(0xffffff).into());
                             let play = if live { play.on_click(cx.listener(|this, _, _, cx| this.play_video(cx))) } else { play };

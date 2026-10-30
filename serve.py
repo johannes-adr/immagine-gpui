@@ -1,3 +1,4 @@
+import io
 import http.client, http.server, os, socket, socketserver, ssl, subprocess, threading, urllib.parse
 
 # PORT=8090 python3 serve.py runs a second server (e.g. from a worktree) next to the default one.
@@ -87,6 +88,32 @@ class H(http.server.SimpleHTTPRequestHandler):
                     self.send_header("Vary", "Accept-Encoding")
                     self.end_headers()
                     return f
+        rng = self.headers.get("Range", "")
+        if rng.startswith("bytes=") and "," not in rng and os.path.isfile(path):
+            # Single byte range of a static file (the video player streams by range); small files only, read whole.
+            size = os.path.getsize(path)
+            first, _, last = rng[6:].partition("-")
+            try:
+                start = int(first) if first else max(size - int(last), 0)
+                end = min(int(last), size - 1) if first and last else size - 1
+            except ValueError:
+                start, end = 0, -1
+            if start > end or start >= size:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return None
+            with open(path, "rb") as f:
+                f.seek(start)
+                data = f.read(end - start + 1)
+            self.send_response(206)
+            self.send_header("Content-Type", self.guess_type(path))
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+            return io.BytesIO(data)
         return super().send_head()
 
     def end_headers(self):

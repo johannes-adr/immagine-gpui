@@ -12,6 +12,7 @@ pub mod iso_date;
 pub mod json;
 pub mod media_duration;
 pub mod models;
+pub mod movie;
 pub mod ports;
 pub mod range_groups;
 pub mod rendition_cache;

@@ -13,6 +13,7 @@ mod search;
 mod tab_bar;
 mod thumbs;
 mod timeline;
+mod video_player;
 mod viewer;
 
 use crate::components::rubber_band::{self, RubberBand};

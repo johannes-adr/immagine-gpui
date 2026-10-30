@@ -108,7 +108,7 @@ impl Thumbs {
     }
 }
 
-fn render_image(width: u32, height: u32, mut rgba: Vec<u8>) -> Option<Arc<RenderImage>> {
+pub(super) fn render_image(width: u32, height: u32, mut rgba: Vec<u8>) -> Option<Arc<RenderImage>> {
     // GPUI paints BGRA.
     for px in rgba.chunks_exact_mut(4) {
         px.swap(0, 2);

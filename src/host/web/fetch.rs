@@ -56,3 +56,49 @@ impl HttpTransport for FetchTransport {
         })
     }
 }
+
+/// Downloads `url` with the session token as bearer (works cross-origin; same-origin the cookie applies too).
+pub async fn bytes(url: &str) -> Result<Vec<u8>, String> {
+    let js = |e: JsValue| e.as_string().unwrap_or_else(|| format!("{e:?}"));
+    let init = RequestInit::new();
+    init.set_credentials(RequestCredentials::SameOrigin);
+    if let Some(token) = super::local_storage::get(super::TOKEN_KEY) {
+        let headers = Headers::new().map_err(js)?;
+        headers.set("Authorization", &format!("Bearer {token}")).map_err(js)?;
+        init.set_headers(&headers);
+    }
+    let request = web_sys::Request::new_with_str_and_init(url, &init).map_err(js)?;
+    let window = web_sys::window().ok_or("no window")?;
+    let response: Response = JsFuture::from(window.fetch_with_request(&request)).await.map_err(js)?.dyn_into().map_err(js)?;
+    if !response.ok() {
+        return Err(format!("HTTP {}", response.status()));
+    }
+    let buffer = JsFuture::from(response.array_buffer().map_err(js)?).await.map_err(js)?;
+    Ok(Uint8Array::new(&buffer).to_vec())
+}
+
+/// `Range: bytes=start-end` GET with the session token. 206 gives the range and the file size from
+/// `Content-Range`; 200 means the server ignored the header and the body is the whole file.
+pub async fn range(url: &str, start: u64, end_inclusive: u64) -> Result<crate::host::RangeResponse, String> {
+    let js = |e: JsValue| e.as_string().unwrap_or_else(|| format!("{e:?}"));
+    let init = RequestInit::new();
+    init.set_credentials(RequestCredentials::SameOrigin);
+    let headers = Headers::new().map_err(js)?;
+    headers.set("Range", &format!("bytes={start}-{end_inclusive}")).map_err(js)?;
+    if let Some(token) = super::local_storage::get(super::TOKEN_KEY) {
+        headers.set("Authorization", &format!("Bearer {token}")).map_err(js)?;
+    }
+    init.set_headers(&headers);
+    let request = web_sys::Request::new_with_str_and_init(url, &init).map_err(js)?;
+    let window = web_sys::window().ok_or("no window")?;
+    let response: Response = JsFuture::from(window.fetch_with_request(&request)).await.map_err(js)?.dyn_into().map_err(js)?;
+    let status = response.status();
+    if status != 200 && status != 206 {
+        return Err(format!("HTTP {status}"));
+    }
+    let total = if status == 206 { response.headers().get("Content-Range").ok().flatten().and_then(|v| crate::host::content_range_total(&v)) } else { None };
+    let buffer = JsFuture::from(response.array_buffer().map_err(js)?).await.map_err(js)?;
+    let bytes = Uint8Array::new(&buffer).to_vec();
+    let total = if status == 206 { total } else { Some(bytes.len() as u64) };
+    Ok(crate::host::RangeResponse { bytes, total, partial: status == 206 })
+}
