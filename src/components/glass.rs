@@ -6,6 +6,20 @@ pub(crate) fn glass_div(tint: Hsla, radius: f32) -> Div {
     glass_div_faded(tint, radius, 1.)
 }
 
+/// Only the backdrop blur and a tint, without refraction or rim light: for large bars that should not show an edge.
+pub(crate) fn glass_blur(tint: Hsla, k: f32) -> Div {
+    let style = GlassStyle {
+        corner_radius: px(0.),
+        blur: px(14. * k),
+        bezel: px(12.),
+        refraction: px(0.),
+        dispersion: 0.,
+        light: 0.,
+        tint: Hsla { a: tint.a * k, ..tint },
+    };
+    div().relative().child(canvas(|_, _, _| (), move |bounds, _, window, _| window.paint_glass(bounds, style)).absolute().top_0().left_0().size_full())
+}
+
 /// Glass has no opacity, so `k` (1 = full, 0 = gone) scales every effect of the pass down to an invisible one.
 pub(crate) fn glass_div_faded(tint: Hsla, radius: f32, k: f32) -> Div {
     let style = GlassStyle {

@@ -1,7 +1,7 @@
 //! Timeline: all photos newest first, a virtualized grid of server thumbnails.
 
 use super::{thumbs, Immagine};
-use crate::components::glass::glass_div;
+use crate::components::glass::glass_blur;
 use crate::theme::Palette;
 use crate::logic::models::timeline::TimelineItem;
 use gpui_kit::*;
@@ -28,7 +28,7 @@ impl Immagine {
         let cell = ((vw - GAP * (columns as f32 - 1.)) / columns as f32).floor();
         let rows = items.len().div_ceil(columns);
         let items_empty = items.is_empty();
-        let footer = self.bottom.max(10.) + 84.;
+        let footer = self.bottom.max(10.) + 94.;
 
         let origin = self.origin.clone();
         let placeholder = p.chip;
@@ -36,7 +36,7 @@ impl Immagine {
         let store = self.thumbs.clone();
         let bounds_map = self.tile_bounds.clone();
         let grid_bounds = self.grid_bounds.clone();
-        let list = uniform_list(id, rows + 1, move |range, window, cx| {
+        let list = uniform_list(id, rows, move |range, window, cx| {
             store.borrow_mut().begin_frame();
             for evicted in store.borrow_mut().take_evicted() {
                 let _ = window.drop_image(evicted);
@@ -84,15 +84,13 @@ impl Immagine {
                                 view.update(cx, |this, cx| this.open_viewer(all.clone(), idx, cx)).ok();
                             })
                     });
-                    if row >= rows {
-                        return div().h(px(footer)).into_any_element();
-                    }
                     div().h(px(cell + GAP)).flex().gap(px(GAP)).children(tiles).into_any_element()
                 })
                 .collect()
         })
         .size_full()
-        .pt(px(lead));
+        .pt(px(lead))
+        .pb(px(footer));
         let list = match scroll {
             Some((handle, placed)) => {
                 if !items_empty && !placed.replace(true) {
@@ -108,7 +106,7 @@ impl Immagine {
 
     pub(super) fn timeline_view(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The header is a glass strip laid over the grid, which scrolls underneath it (blurred).
-        let head = self.top.max(12.) + 112.;
+        let head = self.top.max(12.) + 78.;
         let list = self.photo_grid("timeline", self.items.clone(), head, Some((&self.timeline_scroll, &self.timeline_placed)), p, window, cx);
 
         let count = self.items.len();
@@ -119,31 +117,44 @@ impl Immagine {
             .relative()
             .child(div().absolute().top_0().left_0().size_full().flex().flex_col().child(list))
             .child(
-                glass_div(p.bar_tint, 0.)
+                div()
                     .absolute()
                     .top_0()
                     .left_0()
                     .w_full()
                     .h(px(head))
-                    .px_4()
-                    .pb_2()
-                    .flex()
-                    .flex_row()
-                    .items_end()
-                    .justify_between()
+                    // Glass strips of growing strength, shorter each time: the blur builds up toward the top edge
+                    // instead of ending in one hard line (glass cannot fade, and a later strip replaces the
+                    // earlier one where they overlap).
+                    .children([(0.2, 0.), (0.45, 9.), (0.7, 18.), (1., 28.)].map(|(k, cut)| {
+                        glass_blur(p.bar_tint, k).absolute().top_0().left_0().w_full().h(px(head - cut))
+                    }))
                     .child(
                         div()
-                            .child(div().text_size(px(34.)).font_weight(FontWeight::BOLD).child("Mediathek"))
-                            .child(div().text_size(px(15.)).text_color(p.secondary).child(subtitle)),
-                    )
-                    .child(
-                        div()
-                            .id("logout")
-                            .text_size(px(15.))
-                            .text_color(p.secondary)
-                            .active(|s| s.opacity(0.6))
-                            .child("Abmelden")
-                            .on_click(cx.listener(|this, _, _, cx| this.log_out(cx))),
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .px_4()
+                            .pb_2()
+                            .flex()
+                            .flex_row()
+                            .items_end()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .child(div().text_size(px(34.)).font_weight(FontWeight::BOLD).child("Mediathek"))
+                                    .child(div().text_size(px(15.)).text_color(p.secondary).child(subtitle)),
+                            )
+                            .child(
+                                div()
+                                    .id("logout")
+                                    .text_size(px(15.))
+                                    .text_color(p.secondary)
+                                    .active(|s| s.opacity(0.6))
+                                    .child("Abmelden")
+                                    .on_click(cx.listener(|this, _, _, cx| this.log_out(cx))),
+                            ),
                     ),
             )
     }
