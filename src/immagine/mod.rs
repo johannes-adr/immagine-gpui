@@ -494,6 +494,7 @@ impl Render for Immagine {
         let p = Palette::new(self.dark);
         self.rubber.tick(window);
         self.settings.sheet.tick(window);
+        self.settings.rubber.tick(window);
         self.grid_default(window.viewport_size().width.into());
         self.grid_tick(window);
         let background = if self.dark { rgb(0x000000) } else { rgb(0xffffff) };
@@ -533,13 +534,13 @@ impl Render for Immagine {
             .child(self.grid_input(cx))
             .child(rubber_band::input(cx.weak_entity(), |this, dy, phase, window| {
                 // While the grid zooms, the first finger of the pinch must not also scroll the list or start a fling.
-                if this.settings.sheet.visible() {
-                    window.cancel_touch_momentum();
-                    return (true, false);
-                }
                 if this.grid_zooming() {
                     window.cancel_touch_momentum();
                     return (true, false);
+                }
+                // The settings sheet covers the page: its list takes the gesture, with its own band.
+                if this.settings.sheet.visible() {
+                    return this.settings_scroll_event(dy, phase, window);
                 }
                 let scroll = this.active_scroll();
                 this.rubber.event(dy, phase, scroll.as_ref(), window)

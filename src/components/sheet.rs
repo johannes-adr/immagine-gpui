@@ -1,6 +1,7 @@
 //! Modal bottom sheet (Apple HIG "Sheets"): rises from the bottom edge over a dimmed page, rounded at the top,
-//! a close circle at the top right. It follows the finger while dragged down; on release it closes when it was
-//! pulled past `CLOSE_AT` of its height or flicked down, else it springs back open.
+//! a close circle at the top right. Only the title strip (`HEADER`) drags it, so content below can scroll. It
+//! follows the finger down but never lifts above fully open; on release it closes when it was pulled past
+//! `CLOSE_AT` of its height or flicked down, else it springs back open.
 //!
 //! Usage: keep one `Sheet` in the view, call `tick` once per render, put `overlay` last in the root's children
 //! while `visible()`, and feed raw touch events to `hit`/`grab`/`drag_to`/`release` (desktop mouse events are
@@ -18,6 +19,8 @@ const CLOSE_AT: f32 = 0.25;
 /// Downward speed (px/ms) of a release that closes it however far it was pulled.
 const FLICK: f32 = 0.6;
 const CORNER: f32 = 38.;
+/// Height of the title strip; only a press there drags the sheet, so the content below can scroll.
+pub(crate) const HEADER: f32 = 72.;
 
 #[derive(Clone, Copy, Default)]
 struct Drag {
@@ -109,10 +112,10 @@ impl Sheet {
         s.open && y >= s.top
     }
 
-    /// A pointer went down on the panel: the sheet now follows it.
+    /// A pointer went down on the panel's title strip: the sheet now follows it. Presses on the content are ignored.
     pub(crate) fn grab(&self, y: f32) {
         self.edit(|s| {
-            if s.open && s.drag.is_none() {
+            if s.open && s.drag.is_none() && y < s.top + HEADER {
                 s.anim = None;
                 s.drag = Some(Drag { start_y: y, start_shown: s.shown, last_y: y, last_at: now_ms(), ..Drag::default() });
             }
@@ -132,9 +135,8 @@ impl Sheet {
             d.moved += (y - d.last_y).abs();
             d.last_y = y;
             d.last_at = now;
-            // Pulling up past fully open meets resistance.
-            let raw = d.start_shown - (y - d.start_y) / s.height;
-            s.shown = if raw > 1. { 1. + (raw - 1.) * 0.1 } else { raw.max(0.) };
+            // The panel stays on the bottom edge: it can be pulled down, never lifted above fully open.
+            s.shown = (d.start_shown - (y - d.start_y) / s.height).clamp(0., 1.);
             s.drag = Some(d);
         });
     }
@@ -204,7 +206,7 @@ pub(crate) fn overlay<V: 'static>(
         .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, _| field(this).grab(e.position.y.into())))
         .child(
             div()
-                .h(px(72.))
+                .h(px(HEADER))
                 .flex()
                 .items_center()
                 .justify_center()

@@ -42,6 +42,10 @@ const STALE_FRAMES: u64 = 4;
 /// Time, not frames: views that do not render continuously (Alben) would otherwise never retry.
 const RETRY_MS: f64 = 1000.;
 const MAX_TRIES: u8 = 4;
+/// A load still running after this long is given up (its request aborted, its slot freed), so a request that
+/// never answers cannot hold a slot for good. Grid thumbnails are small; previews and originals get longer.
+const THUMB_TIMEOUT_MS: u64 = 15_000;
+const LARGE_TIMEOUT_MS: u64 = 120_000;
 
 struct Entry {
     image: Arc<RenderImage>,
@@ -62,11 +66,24 @@ struct Job {
     low: bool,
 }
 
-/// A load in flight: its cancel token and the last frame something asked for it.
+/// A load in flight: its cancel token and the last frame something asked for it. `seq` tells this load apart from
+/// a later one for the same key (after a timeout gave this one up).
 struct Running {
     cancel: Cancel,
     frame: u64,
     net: bool,
+    seq: u64,
+}
+
+/// Counters for the debug line (`Thumbs::stats`).
+#[derive(Default)]
+struct Diag {
+    started: u64,
+    done: u64,
+    failed: u64,
+    aborted: u64,
+    timeouts: u64,
+    last_error: Option<String>,
 }
 
 /// Keys of `THUMB_CACHE_DB`, kept in memory so a miss never touches IndexedDB. `known` holds the names as
@@ -152,6 +169,7 @@ pub(super) struct Thumbs {
     wake_pending: bool,
     /// The last real scroll movement was towards the top of the list (offset grew); prefetch looks that way.
     up: bool,
+    diag: Diag,
 }
 
 pub(super) type SharedThumbs = Rc<RefCell<Thumbs>>;
@@ -176,6 +194,7 @@ pub(super) fn new(view: WeakEntity<Immagine>, local: Rc<RefCell<HashSet<String>>
         speed_at: f64::MIN,
         wake_pending: false,
         up: false,
+        diag: Diag::default(),
     }))
 }
 
@@ -239,6 +258,48 @@ impl Thumbs {
                 self.evicted.push(e.image);
             }
         }
+    }
+
+    /// One line for the debug overlay: queued / running (slots in use, network) / failed keys / decoded images, and
+    /// the counters since start. `run` and `slots` must match; a difference means a slot leaked.
+    pub(super) fn stats(&self) -> String {
+        let d = &self.diag;
+        let mut text = format!(
+            "q{} run{} slots{}/{} net{}/{} failed{} img{} {}MB | ok{} err{} abort{} timeout{}",
+            self.queue.len(),
+            self.running.len(),
+            self.active,
+            MAX_ACTIVE,
+            self.net_active,
+            MAX_NET,
+            self.failed.len(),
+            self.images.len(),
+            self.bytes / (1024 * 1024),
+            d.done,
+            d.failed,
+            d.aborted,
+            d.timeouts,
+        );
+        if self.held() {
+            text.push_str(" held");
+        }
+        if let Some(e) = &d.last_error {
+            text.push_str(" | ");
+            text.push_str(e);
+        }
+        text
+    }
+
+    /// Frees the slot of the load `seq` of `key` if it is still the one running. False when it was already given up.
+    fn release(&mut self, key: &str, seq: u64) -> bool {
+        if !self.running.get(key).is_some_and(|r| r.seq == seq) {
+            return false;
+        }
+        if let Some(r) = self.running.remove(key) {
+            self.active -= 1;
+            self.net_active -= r.net as usize;
+        }
+        true
     }
 
     fn fail(&mut self, key: &str) {
@@ -452,11 +513,13 @@ fn pump(store: &SharedThumbs, cx: &mut App) {
             let job = s.queue.swap_remove(index);
             let net = !s.cheap(&job.key, &job.url);
             let cancel = Cancel::new();
-            s.running.insert(job.key.clone(), Running { cancel: cancel.clone(), frame: job.frame, net });
+            s.running.insert(job.key.clone(), Running { cancel: cancel.clone(), frame: job.frame, net, seq: job.seq });
             s.active += 1;
             s.net_active += net as usize;
+            s.diag.started += 1;
             (job, cancel)
         };
+        schedule_timeout(store, &job.key, job.seq, &cancel, cx);
         let store = store.clone();
         // Key `t:<id>` / `p:<id>` / `f:<id>`: a downloaded asset has its thumbnail and preview stored under the same
         // keys and its original under the bare id (the full-size rendition is decoded from it).
@@ -477,7 +540,7 @@ fn pump(store: &SharedThumbs, cx: &mut App) {
                 }
                 Err(e) => (Err(e), None),
             };
-            let _ = cx.update(|app| finish(&store, &job.key, job.side, result, &cancel, app));
+            let _ = cx.update(|app| finish(&store, &job.key, job.seq, job.side, result, &cancel, app));
             // Fire and forget: the next launch finds the thumbnail without the network.
             if let (Some(key), Some(bytes)) = (put_key, fresh) {
                 cache_put(&store, key, bytes).await;
@@ -569,22 +632,51 @@ pub(super) fn clear_cache(store: &SharedThumbs) {
     store.borrow_mut().cache = CacheIndex::default();
 }
 
-fn finish(store: &SharedThumbs, key: &str, side: u32, result: Result<(Arc<RenderImage>, usize), String>, cancel: &Cancel, cx: &mut App) {
+/// Gives a load up after `THUMB_TIMEOUT_MS` / `LARGE_TIMEOUT_MS`: aborts it, frees its slot and counts it as failed
+/// (retried later). Its late answer, if one ever comes, is dropped by `finish`.
+fn schedule_timeout(store: &SharedThumbs, key: &str, seq: u64, cancel: &Cancel, cx: &mut App) {
+    let ms = if key.starts_with("t:") { THUMB_TIMEOUT_MS } else { LARGE_TIMEOUT_MS };
+    let (store, key, cancel) = (store.clone(), key.to_string(), cancel.clone());
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(Duration::from_millis(ms)).await;
+        let view = {
+            let mut s = store.borrow_mut();
+            if !s.release(&key, seq) {
+                return;
+            }
+            s.fail(&key);
+            s.diag.timeouts += 1;
+            s.diag.last_error = Some(format!("{key}: no answer after {} s", ms / 1000));
+            s.view.clone()
+        };
+        cancel.cancel();
+        let _ = cx.update(|app| {
+            pump(&store, app);
+            view.update(app, |_, cx| cx.notify()).ok();
+        });
+    })
+    .detach();
+}
+
+fn finish(store: &SharedThumbs, key: &str, seq: u64, side: u32, result: Result<(Arc<RenderImage>, usize), String>, cancel: &Cancel, cx: &mut App) {
     let mut retry = None;
     let view = {
         let mut s = store.borrow_mut();
-        s.active -= 1;
-        if s.running.remove(key).is_some_and(|r| r.net) {
-            s.net_active -= 1;
+        // Not ours any more: the timeout gave this load up (and freed its slot) already.
+        if !s.release(key, seq) {
+            return;
         }
         match result {
             Ok((image, bytes)) => {
+                s.diag.done += 1;
                 s.failed.remove(key);
                 s.insert(key.to_string(), image, bytes, side);
             }
             // An aborted load is not a failure: the tile is simply asked for again if it comes back.
-            Err(_) if cancel.is_cancelled() => {}
-            Err(_) => {
+            Err(_) if cancel.is_cancelled() => s.diag.aborted += 1,
+            Err(e) => {
+                s.diag.failed += 1;
+                s.diag.last_error = Some(format!("{key}: {e}"));
                 s.fail(key);
                 retry = Some(RETRY_MS * s.failed.get(key).map_or(1, |f| f.1) as f64 + 50.);
             }

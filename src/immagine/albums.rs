@@ -82,6 +82,16 @@ impl AlbumsState {
     }
 }
 
+/// Cover counts of one browser render, for the debug line: tiles asking, tiles with a cover asset, covers with a
+/// thumbhash, covers whose thumbnail is loaded.
+#[derive(Default)]
+struct CoverTally {
+    tiles: usize,
+    covers: usize,
+    hashes: usize,
+    loaded: usize,
+}
+
 fn newest_first(mut items: Vec<TimelineItem>) -> Vec<TimelineItem> {
     items.sort_by(|a, b| b.sort_date.cmp(&a.sort_date));
     items
@@ -150,16 +160,34 @@ impl Immagine {
         cx.notify();
     }
 
-    /// The picture for a cover: the grid thumbnail when loaded, else its thumbhash stand-in.
-    fn cover_image(&self, cover: Option<&Cover>, cx: &mut App) -> Option<Arc<RenderImage>> {
+    /// The picture for a cover: the grid thumbnail when loaded, else its thumbhash stand-in. Counts into `tally`
+    /// for the debug line.
+    fn cover_image(&self, cover: Option<&Cover>, tally: &mut CoverTally, cx: &mut App) -> Option<Arc<RenderImage>> {
+        tally.tiles += 1;
         let cover = cover?;
+        tally.covers += 1;
+        tally.hashes += cover.thumbhash.is_some() as usize;
         let loaded = thumbs::get(
             &self.thumbs,
             &format!("t:{}", cover.asset_id),
             || thumbs::thumb_url(&self.origin, &cover.asset_id, "thumbnail", cover.thumbhash.as_deref()),
             cx,
         );
+        tally.loaded += loaded.is_some() as usize;
         loaded.or_else(|| cover.thumbhash.as_deref().and_then(|hash| thumbs::placeholder(&self.thumbs, &cover.asset_id, hash)))
+    }
+
+    /// Debug line (setting `immagine.debug`, "FPS anzeigen"): the image store's counters, plus cover counts in the
+    /// browser.
+    fn thumbs_debug(&self, p: &Palette, tally: Option<&CoverTally>) -> Option<Div> {
+        if !self.debug {
+            return None;
+        }
+        let mut text = self.thumbs.borrow().stats();
+        if let Some(t) = tally {
+            text = format!("covers {}/{} hash{} loaded{} | {text}", t.covers, t.tiles, t.hashes, t.loaded);
+        }
+        Some(div().text_size(px(11.)).text_color(p.secondary).child(text))
     }
 
     /// The album page: back chip, album name, then the photo grid.
@@ -178,7 +206,8 @@ impl Immagine {
             .gap_1()
             .child(back)
             .child(div().text_size(px(34.)).font_weight(FontWeight::BOLD).truncate().child(open.name.clone()))
-            .child(div().text_size(px(15.)).text_color(p.secondary).child(subtitle));
+            .child(div().text_size(px(15.)).text_color(p.secondary).child(subtitle))
+            .children(self.thumbs_debug(p, None));
         let list = self.photo_grid("album-photos", open.items.clone(), 0., (&open.scroll, None), p, window, cx);
         self.rubber.shift(div().size_full().flex().flex_col().pt(px(self.top.max(12.))).child(header).child(list)).into_any_element()
     }
@@ -192,6 +221,7 @@ impl Immagine {
         let columns = ((vw / TILE_MIN).floor() as usize).clamp(2, 6);
         let tile = ((vw - 2. * PAD - GAP * (columns as f32 - 1.)) / columns as f32).floor().max(40.);
         let half = (tile / 2.).floor();
+        let mut tally = CoverTally::default();
         let folders = st.tree.folders(&st.path);
         let albums = st.tree.albums(&st.path);
 
@@ -200,7 +230,7 @@ impl Immagine {
             // 2x2 collage of the first albums below the folder.
             let mut covers: Vec<Option<Arc<RenderImage>>> = Vec::new();
             for album in st.tree.collage_albums(&folder.path, 4) {
-                covers.push(self.cover_image(st.covers.get(&album.id), cx));
+                covers.push(self.cover_image(st.covers.get(&album.id), &mut tally, cx));
             }
             let quads = (0..4).map(|k| {
                 let picture = covers.get(k).cloned().flatten();
@@ -234,7 +264,7 @@ impl Immagine {
             );
         }
         for (i, album) in albums.iter().enumerate() {
-            let picture = self.cover_image(st.covers.get(&album.id), cx);
+            let picture = self.cover_image(st.covers.get(&album.id), &mut tally, cx);
             let count = st.counts.get(&album.id).copied().unwrap_or(album.asset_count.max(0) as usize);
             let cell = div()
                 .size(px(tile))
@@ -316,7 +346,8 @@ impl Immagine {
                             .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
                     ),
             )
-            .child(div().text_size(px(15.)).text_color(p.secondary).child(subtitle));
+            .child(div().text_size(px(15.)).text_color(p.secondary).child(subtitle))
+            .children(self.thumbs_debug(p, Some(&tally)));
 
         let body = if tiles.is_empty() {
             let empty = if st.path.is_empty() { "Keine Alben" } else { "Leerer Ordner" };

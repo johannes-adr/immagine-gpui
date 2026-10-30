@@ -1,6 +1,7 @@
 //! Settings sheet, opened by the gear at the top right of Sammlungen: what the app stores and how it runs.
 
 use super::{DEBUG_KEY, downloads::DOWNLOAD_DB, thumbs::{self, THUMB_CACHE_DB}, video_player::DISK_DB, Immagine, DB};
+use crate::components::rubber_band::RubberBand;
 use crate::components::sheet::{self, Sheet};
 use crate::host::{AppInfo, Current as H, Host, Pinch};
 use crate::theme::{Palette, BLUE};
@@ -17,6 +18,10 @@ pub(super) struct SettingsState {
     /// Downloads: bare keys (originals/videos), `t:` thumbnails, `p:` previews.
     dl_parts: Option<(usize, usize, usize)>,
     info: Option<AppInfo>,
+    /// The content list below the title strip and its own overscroll band (the page's band stays put behind
+    /// the scrim).
+    scroll: ScrollHandle,
+    pub(super) rubber: RubberBand,
 }
 
 /// Entry count and bytes of one blob db.
@@ -79,6 +84,19 @@ fn group(card: Rgba, caption: &str, p: &Palette, rows: Vec<Div>) -> Div {
 }
 
 impl Immagine {
+    /// A touch scroll step while the sheet is shown (from the root's `rubber_band::input`). The content scrolls
+    /// like any `overflow_y_scroll` div (GPUI turns the pan into scroll events at the finger); this only adds the
+    /// sheet's own rubber band, and swallows the steps while the title strip drags the sheet, so the list does
+    /// not scroll along with it.
+    pub(super) fn settings_scroll_event(&mut self, dy: f32, phase: TouchPhase, window: &mut Window) -> (bool, bool) {
+        if self.settings.sheet.dragging() {
+            window.cancel_touch_momentum();
+            return (true, false);
+        }
+        let scroll = self.settings.scroll.clone();
+        self.settings.rubber.event(dy, phase, Some(&scroll), window)
+    }
+
     pub(super) fn open_settings(&mut self, cx: &mut Context<Self>) {
         self.settings.sheet.open();
         cx.notify();
@@ -252,8 +270,9 @@ impl Immagine {
                     .on_click(cx.listener(|this, _, _, cx| this.log_out(cx))),
             )],
         );
-        let content = div()
+        let inner = div()
             .px_4()
+            .pt_2()
             .pb(px(self.bottom.max(16.)))
             .flex()
             .flex_col()
@@ -261,7 +280,19 @@ impl Immagine {
             .child(storage)
             .child(app)
             .child(debug_group)
-            .child(account)
+            .child(account);
+        // Scrolls below the title strip (absolute with top + bottom = a definite height, so `max_offset` is the
+        // overflow); the sheet's own rubber band gives it the iOS overscroll.
+        let content = div()
+            .id("settings-scroll")
+            .absolute()
+            .top(px(sheet::HEADER))
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .overflow_y_scroll()
+            .track_scroll(&st.scroll)
+            .child(st.rubber.shift(inner))
             .into_any_element();
         Some(sheet::overlay(
             sheet,
