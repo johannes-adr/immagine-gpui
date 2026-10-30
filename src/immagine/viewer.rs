@@ -41,6 +41,7 @@ const DOUBLE_TAP_ZOOM: f32 = 2.5;
 const FULLSIZE_ZOOM: f32 = 1.2;
 /// Movement (px) that turns a press into a drag, so a tap with a little jitter still counts as a tap.
 const TAP_SLOP: f32 = 8.;
+const CHROME_MS: f64 = 180.;
 /// Dark grey of the viewer's glass buttons, over the viewer's black background.
 const VIEWER_TINT: Hsla = Hsla { h: 0., s: 0., l: 0.28, a: 0.62 };
 /// Darker tint of the delete confirmation, which is bigger and carries text.
@@ -117,6 +118,9 @@ pub(super) struct Viewer {
     snap: Option<Snap>,
     /// Controls' visibility when closing began, and when it did: they fade out over the first part of the morph.
     chrome0: f32,
+    /// Tap on the photo hides the controls; `chrome_at` is when that last changed (they fade over `CHROME_MS`).
+    chrome_hidden: bool,
+    chrome_at: f64,
     pub(super) close_at: f64,
     /// A drag just ended: the next render cancels the scroll coast GPUI starts from the same finger.
     stop_momentum: Cell<bool>,
@@ -157,6 +161,12 @@ fn xy(p: Point<Pixels>) -> (f32, f32) {
 }
 
 impl Viewer {
+    /// Opacity factor of the controls from the tap toggle (1 = shown, 0 = hidden), fading over `CHROME_MS`.
+    fn chrome_vis(&self, now: f64) -> f32 {
+        let t = ((now - self.chrome_at) / CHROME_MS).clamp(0., 1.) as f32;
+        if self.chrome_hidden { 1. - t } else { t.max(if self.chrome_at == 0. { 1. } else { 0. }) }
+    }
+
     fn reset_view(&mut self) {
         self.zoom = 1.;
         self.pan = (0., 0.);
@@ -217,6 +227,8 @@ impl Immagine {
             release: None,
             snap: None,
             chrome0: 1.,
+            chrome_hidden: false,
+            chrome_at: 0.,
             close_at: 0.,
             stop_momentum: Cell::new(false),
             zoom: 1.,
@@ -338,7 +350,7 @@ impl Immagine {
                 if ds < CLOSE_SCALE || (dy > 40. && v.vel_y > FLICK_SPEED) {
                     let (vw, vh) = v.viewport.get();
                     let (ax, ay) = v.anchor;
-                    v.chrome0 = chrome_alpha(ds);
+                    v.chrome0 = chrome_alpha(ds) * v.chrome_vis(now_ms());
                     v.release = Some(Release {
                         rect: (ax - ax * ds + dx, ay - ay * ds + dy, vw * ds, vh * ds),
                         fade: (1. - dy / (vh * 0.5)).clamp(0.3, 1.),
@@ -706,6 +718,21 @@ impl Immagine {
         .detach();
     }
 
+    /// Tap on the photo: hide or show the surrounding controls.
+    fn toggle_chrome(&mut self, cx: &mut Context<Self>) {
+        let Some(v) = self.viewer.as_mut().filter(|v| !v.closing) else { return };
+        if v.moved > TAP_SLOP {
+            return;
+        }
+        let now = now_ms();
+        let vis = v.chrome_vis(now);
+        v.chrome_hidden = !v.chrome_hidden;
+        // Continue from the current opacity when toggled mid-fade.
+        let t = if v.chrome_hidden { vis } else { 1. - vis };
+        v.chrome_at = now - t as f64 * CHROME_MS;
+        cx.notify();
+    }
+
     fn toggle_info(&mut self, cx: &mut Context<Self>) {
         let Some(v) = self.viewer.as_mut().filter(|v| !v.closing) else { return };
         v.info = !v.info;
@@ -893,7 +920,11 @@ impl Immagine {
             window.request_animation_frame();
         }
         let snapping = snap.is_some();
-        let mut k = chrome_alpha(ds);
+        let chrome_vis = v.chrome_vis(now);
+        if now - v.chrome_at < CHROME_MS {
+            window.request_animation_frame();
+        }
+        let mut k = chrome_alpha(ds) * chrome_vis;
         if closing {
             let t = ((now - v.close_at) / (CLOSE_MS as f64 * 0.5)).clamp(0., 1.) as f32;
             k = v.chrome0 * (1. - t);
@@ -1132,6 +1163,12 @@ impl Immagine {
                 .child(
                     div()
                         .id(("viewer", v.serial))
+                        .on_click(cx.listener(|this, e: &ClickEvent, _, cx| {
+                            // Click 2 undoes the toggle of click 1 of a double tap (which zooms instead).
+                            if e.click_count() <= 2 {
+                                this.toggle_chrome(cx);
+                            }
+                        }))
                         .absolute()
                         .top_0()
                         .left_0()
