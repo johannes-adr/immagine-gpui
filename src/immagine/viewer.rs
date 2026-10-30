@@ -29,6 +29,9 @@ const PAGE_FRACTION: f32 = 0.2;
 const CLOSE_SCALE: f32 = 0.82;
 /// ... or a quick downward flick (px per move event) after at least this much travel.
 const FLICK_SPEED: f32 = 14.;
+/// Length of the open and close morphs. Long on purpose for now, to follow them by eye; ~400 is the usual feel.
+pub(super) const OPEN_MS: u64 = 800;
+pub(super) const CLOSE_MS: u64 = 800;
 /// Black strip between neighbouring photos while swiping, so their edges stay apart.
 const PAGE_GAP: f32 = 20.;
 const MAX_ZOOM: f32 = 6.;
@@ -72,7 +75,7 @@ pub(super) struct Viewer {
     index: usize,
     from: Option<Bounds<Pixels>>,
     pub(super) closing: bool,
-    serial: u32,
+    pub(super) serial: u32,
     /// Pointer position where the current drag started, the last one seen, and the distance moved.
     start: Option<(f32, f32)>,
     last: (f32, f32),
@@ -205,7 +208,7 @@ impl Immagine {
         v.serial = self.viewer_serial;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(400)).await;
+            cx.background_executor().timer(Duration::from_millis(CLOSE_MS + 60)).await;
             this.update(cx, |t, cx| {
                 if t.viewer.as_ref().is_some_and(|v| v.closing) {
                     t.viewer = None;
@@ -633,7 +636,7 @@ impl Immagine {
                         .top_0()
                         .left_0()
                         .size_full()
-                        .with_animation(("viewer-anim", v.serial), anim(if closing { 360 } else { 420 }), move |el, d| {
+                        .with_animation(("viewer-anim", v.serial), anim(if closing { CLOSE_MS } else { OPEN_MS }), move |el, d| {
                             let t = if closing { 1. - d } else { d };
                             // While dragging down the backdrop fades and the photo follows the finger.
                             let fade = match release {

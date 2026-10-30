@@ -1,7 +1,7 @@
 use super::Immagine;
 use crate::components::glass::glass_div;
 use crate::theme::{Palette, BLUE};
-use crate::util::{lerp, spring_out};
+use crate::util::{anim, lerp, spring_out};
 use gpui_kit::*;
 use std::time::Duration;
 
@@ -163,13 +163,10 @@ impl Immagine {
                 )
         };
 
-        div()
-            .absolute()
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .h(px(64. + bottom + 14.))
-            .occlude()
+        // After a photo closes, the bar slides up from below while the photo shrinks (glass cannot fade).
+        let sliding = self.viewer.as_ref().filter(|v| v.closing).map(|v| v.serial);
+        let wrapper = div().id(("tabbar", sliding.unwrap_or(0))).absolute().left_0().right_0().bottom_0().h(px(64. + bottom + 14.)).occlude();
+        let wrapper = wrapper
             .child(
                 div().absolute().left(px(20.)).right(px(20.)).bottom(px(bottom)).child(
                     glass_div(p.bar_tint, 32.).h(px(64.)).p(px(4.)).child(div().relative().size_full().child(thumb)),
@@ -187,8 +184,13 @@ impl Immagine {
                     .child(item(1, album_icon(color(1))))
                     .child(item(2, person_icon(color(2))))
                     .child(input_layer(cx.weak_entity())),
-            )
-            .into_any_element()
+            );
+        match sliding {
+            Some(serial) => wrapper
+                .with_animation(("tabbar-in", serial), anim(super::viewer::CLOSE_MS), move |el, d| el.bottom(px(-(1. - d) * (96. + bottom))))
+                .into_any_element(),
+            None => wrapper.into_any_element(),
+        }
     }
 }
 
