@@ -143,7 +143,7 @@ impl Immagine {
     /// Called for every scroll event before the list sees it (capture phase). Returns true when the event was used up
     /// by the rubber band: the list is at an end and the finger pushes on, or the band is pulled out and the finger
     /// comes back.
-    pub(super) fn overscroll_event(&mut self, dy: f32, cx: &mut Context<Self>) -> bool {
+    pub(super) fn overscroll_event(&mut self, dy: f32, fresh: bool, cx: &mut Context<Self>) -> bool {
         if self.tab != 0 || self.screen != super::Screen::Timeline || self.viewer.as_ref().is_some_and(|v| !v.closing) {
             return false;
         }
@@ -151,6 +151,11 @@ impl Immagine {
         let (offset, max): (f32, f32) = (handle.offset().y.into(), handle.max_offset().y.into());
         let (at_top, at_bottom) = (offset >= -0.5, offset <= -max + 0.5);
         let mut o = self.overscroll.get();
+        // While it springs back, the coasting of the last fling is swallowed (it would fight the spring); only a
+        // new touch takes the band over again.
+        if o.released_at != 0. && o.value != 0. && !fresh {
+            return true;
+        }
         let pulled = o.value != 0.;
         let outward = (at_top && dy > 0.) || (at_bottom && dy < 0.);
         if !pulled && !outward {
@@ -264,7 +269,7 @@ fn overscroll_input(view: WeakEntity<Immagine>) -> Canvas<()> {
                     return;
                 }
                 let dy: f32 = e.delta.pixel_delta(px(16.)).y.into();
-                if dy != 0. && view.update(cx, |t, cx| t.overscroll_event(dy, cx)).unwrap_or(false) {
+                if dy != 0. && view.update(cx, |t, cx| t.overscroll_event(dy, e.touch_phase == TouchPhase::Started, cx)).unwrap_or(false) {
                     cx.stop_propagation();
                 }
             });
