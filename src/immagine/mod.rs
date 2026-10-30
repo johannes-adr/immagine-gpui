@@ -337,6 +337,10 @@ impl Render for Immagine {
             .bg(background)
             .text_color(p.label)
             .child(content)
+            // Glass is ordered by what it overlaps, and the backdrop it samples is copied at the first glass batch.
+            // A tab bar over an empty footer (list scrolled to its end) would be ordered before the photos and see
+            // none of them. This almost invisible layer above the content lifts everything painted after it.
+            .child(div().absolute().top_0().left_0().size_full().bg(rgba(0x00000001)))
             .children(viewer)
             .children(chrome)
             // FPS debug badge, re-enable when profiling:

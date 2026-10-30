@@ -28,7 +28,7 @@ impl Immagine {
         let cell = ((vw - GAP * (columns as f32 - 1.)) / columns as f32).floor();
         let rows = items.len().div_ceil(columns);
         let items_empty = items.is_empty();
-        let footer = self.bottom.max(10.) + 119.;
+        let footer = self.bottom.max(10.) + 104.;
 
         let origin = self.origin.clone();
         let placeholder = p.chip;
@@ -143,8 +143,16 @@ impl Immagine {
                     .left_0()
                     .w_full()
                     .h(px(head))
-                    // One blur strip whose lower part fades out in the shader: a real gradient, no edge.
-                    .child(glass_blur(p.bar_tint, 0.8, 44.).absolute().top_0().left_0().w_full().h(px(head)))
+                    // One blur strip whose lower part fades out in the shader (a real gradient, no edge), reaching
+                    // well below the header text, with a soft darkening that fades out the same way.
+                    .child(glass_blur(p.bar_tint, 0.8, 120.).absolute().top_0().left_0().w_full().h(px(head + 64.)))
+                    .child(
+                        div().absolute().top_0().left_0().w_full().h(px(head + 64.)).bg(linear_gradient(
+                            180.,
+                            linear_color_stop(rgba(if self.dark { 0x0000004d } else { 0x00000014 }), 0.),
+                            linear_color_stop(rgba(0x00000000), 1.),
+                        )),
+                    )
                     .child(
                         div()
                             .absolute()
