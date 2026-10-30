@@ -672,7 +672,9 @@ impl Immagine {
                                 // The clip grows from the whole screen to the grid as the photo shrinks, so closing starts
                                 // without a visible cut.
                                 Some((gx, gy, gw, gh)) if closing => {
-                                    let k = 1. - t;
+                                    // The animation eases out, so `t` falls fast at first: keep the whole screen until the
+                                    // photo is about half way down, then pull the clip in.
+                                    let k = ((0.5 - t) / 0.5).clamp(0., 1.);
                                     let (cx_, cy_, cw, ch) = (lerp(0., gx, k), lerp(0., gy, k), lerp(vw, gw, k), lerp(vh, gh, k));
                                     el.child(div().absolute().left(px(cx_)).top(px(cy_)).w(px(cw)).h(px(ch)).overflow_hidden().child(photo(cx_, cy_)))
                                 }
