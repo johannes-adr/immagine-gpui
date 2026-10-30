@@ -25,7 +25,7 @@ web-sys = { version = "0.3", features = [
     "Location", "Storage", "console", "Performance", "ImageBitmap", "OffscreenCanvas",
     "OffscreenCanvasRenderingContext2d", "ImageData", "Blob", "PointerEvent", "MouseEvent", "Document", "HtmlElement", "HtmlVideoElement",
     "CssStyleDeclaration", "Node", "Element", "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbTransaction", "IdbTransactionMode",
-    "IdbOpenDbRequest", "IdbRequest",
+    "IdbOpenDbRequest", "IdbRequest", "Url",
 ] }
 
 # Desktop host (src/host/desktop): blocking HTTP on worker threads, image codecs, a oneshot to hand results back.

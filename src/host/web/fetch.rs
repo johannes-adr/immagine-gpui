@@ -4,8 +4,8 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Headers, RequestCredentials, RequestInit, Response};
 
-/// `fetch` with same-origin credentials: the Immich auth cookie set by `/api/auth/login`
-/// rides along, which is also what lets GPUI's `img(url)` loads authenticate.
+/// `fetch` against the server origin. Same-origin (proxy) the Immich cookie rides along; a server on another
+/// origin is authorized by the bearer header alone.
 pub struct FetchTransport;
 
 fn network(error: JsValue) -> TransportError {
@@ -31,7 +31,7 @@ impl HttpTransport for FetchTransport {
         if let Some(body) = &request.body {
             init.set_body(&Uint8Array::from(body.as_slice()));
         }
-        let web_request = web_sys::Request::new_with_str_and_init(&request.path, &init).map_err(network)?;
+        let web_request = web_sys::Request::new_with_str_and_init(&format!("{}{}", super::origin(), request.path), &init).map_err(network)?;
         let window = web_sys::window().ok_or_else(|| TransportError::Network("no window".into()))?;
         let response: Response = JsFuture::from(window.fetch_with_request(&web_request))
             .await

@@ -26,9 +26,14 @@ impl Clock for SystemTimeClock {
 
 pub struct Desktop;
 
-/// Server root: `IMMICH_URL`, else the same default `serve.py` proxies to.
+/// Server root: the one saved at login, else `IMMICH_URL`, else the same default `serve.py` proxies to.
 fn server_origin() -> String {
-    std::env::var("IMMICH_URL").unwrap_or_else(|_| "http://immich.server.local".into()).trim_end_matches('/').to_string()
+    store::setting_get("immagine.server")
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("IMMICH_URL").ok())
+        .unwrap_or_else(|| "http://immich.server.local".into())
+        .trim_end_matches('/')
+        .to_string()
 }
 
 impl Host for Desktop {

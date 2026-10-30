@@ -31,6 +31,25 @@ mod js {
     }
 }
 
+/// Key under which the app saves the server the user logged in to (`immagine::SERVER_KEY`).
+const SERVER_KEY: &str = "immagine.server";
+/// Key of the session token (`immagine::TOKEN_KEY`).
+const TOKEN_KEY: &str = "immagine.token";
+
+/// The saved server, else the page's own origin (the `serve.py` proxy). A saved server on another origin is
+/// reached directly and needs CORS on its side; requests then carry the bearer token instead of the cookie.
+pub(crate) fn origin() -> String {
+    local_storage::get(SERVER_KEY)
+        .map(|s| s.trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(origin_of_page)
+}
+
+/// The origin the page itself was loaded from.
+pub(crate) fn origin_of_page() -> String {
+    web_sys::window().and_then(|w| w.location().origin().ok()).unwrap_or_default()
+}
+
 pub struct Web;
 
 impl Host for Web {
@@ -48,7 +67,7 @@ impl Host for Web {
     }
 
     fn origin() -> String {
-        web_sys::window().and_then(|w| w.location().origin().ok()).unwrap_or_default()
+        origin()
     }
 
     fn now_ms() -> f64 {

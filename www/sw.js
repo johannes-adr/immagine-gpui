@@ -1,6 +1,6 @@
 // Precaches the app shell and the wasm bundle so launches never wait for the network.
 // Bump VERSION whenever any precached file changes (the files are not content-hashed).
-const VERSION = "v15";
+const VERSION = "v16";
 const CACHE = "immagine-" + VERSION;
 const ASSETS = [
   "./",
@@ -31,6 +31,8 @@ self.addEventListener("activate", (e) => {
 
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
+  // The Immich API may live on another origin (reached directly, with CORS): never touch it.
+  if (new URL(e.request.url).origin !== self.location.origin) return;
   e.respondWith(
     caches.match(e.request, { ignoreSearch: true }).then((hit) => hit || fetch(e.request)),
   );

@@ -10,11 +10,16 @@ fn js(error: JsValue) -> String {
     error.as_string().unwrap_or_else(|| format!("{error:?}"))
 }
 
-/// Downloads `url` (same-origin credentials, so the Immich cookie applies) and decodes it.
+/// Downloads `url` with the session token as bearer (works cross-origin; same-origin the cookie applies too) and decodes it.
 pub async fn decode_url(url: &str) -> Result<Decoded, String> {
     let window = web_sys::window().ok_or("no window")?;
     let init = RequestInit::new();
     init.set_credentials(RequestCredentials::SameOrigin);
+    if let Some(token) = super::local_storage::get(super::TOKEN_KEY) {
+        let headers = web_sys::Headers::new().map_err(js)?;
+        headers.set("Authorization", &format!("Bearer {token}")).map_err(js)?;
+        init.set_headers(&headers);
+    }
     let request = web_sys::Request::new_with_str_and_init(url, &init).map_err(js)?;
     let response: Response = JsFuture::from(window.fetch_with_request(&request)).await.map_err(js)?.dyn_into().map_err(js)?;
     if !response.ok() {

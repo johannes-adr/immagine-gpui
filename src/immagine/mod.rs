@@ -30,6 +30,8 @@ use std::time::Duration;
 const DB: &str = "immagine";
 const SNAPSHOT_KEY: &str = "store";
 const TOKEN_KEY: &str = "immagine.token";
+/// The server typed at login; the hosts read it to know where to send requests.
+const SERVER_KEY: &str = "immagine.server";
 
 type Engine = SyncEngine<MemoryStore, Transport, SystemClock>;
 
@@ -49,6 +51,7 @@ pub(crate) struct Immagine {
     syncing: bool,
     status: String,
     // Login form.
+    server: Entity<InputState>,
     email: Entity<InputState>,
     password: Entity<InputState>,
     login_error: Option<String>,
@@ -94,6 +97,12 @@ fn oldest_first(mut items: Vec<TimelineItem>) -> Vec<TimelineItem> {
 
 impl Immagine {
     pub(crate) fn new(top: f32, bottom: f32, dark: bool, webgpu: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let initial_server = H::origin();
+        let server = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("Server, z. B. https://immich.example.com");
+            state.set_value(initial_server, window, cx);
+            state
+        });
         let email = cx.new(|cx| InputState::new(window, cx).placeholder("E-Mail"));
         let password = cx.new(|cx| {
             let mut state = InputState::new(window, cx).placeholder("Passwort");
@@ -143,6 +152,7 @@ impl Immagine {
             password,
             login_error: None,
             logging_in: false,
+            server,
             top,
             bottom,
             dark,
@@ -239,9 +249,21 @@ impl Immagine {
         if email.is_empty() || password.is_empty() {
             return;
         }
+        let mut server = self.server.read(cx).value().trim().trim_end_matches('/').to_string();
+        if !server.is_empty() && !server.contains("://") {
+            server = format!("https://{server}");
+        }
+        if server.is_empty() {
+            self.login_error = Some("Bitte eine Server-Adresse eingeben.".into());
+            cx.notify();
+            return;
+        }
         self.logging_in = true;
         self.login_error = None;
-        let origin = self.origin.clone();
+        // Saved before the first request: the transport resolves its paths against the saved server.
+        H::setting_set(SERVER_KEY, &server);
+        self.origin = server.clone();
+        let origin = server;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = async {
