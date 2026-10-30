@@ -9,6 +9,7 @@ mod people;
 mod range_views;
 mod slider;
 mod icons;
+mod search;
 mod tab_bar;
 mod thumbs;
 mod timeline;
@@ -110,6 +111,7 @@ pub(crate) struct Immagine {
     pinch: Option<GestureHandle>,
     albums: albums::AlbumsState,
     people: people::PeopleState,
+    search: search::SearchState,
 }
 
 /// The timeline is stored newest first; the grid reads oldest first, so the newest photos sit at the bottom.
@@ -216,6 +218,7 @@ impl Immagine {
             pinch: None,
             albums: Default::default(),
             people: Default::default(),
+            search: Default::default(),
         };
         this.resume(cx);
         this.ensure_gestures(cx);
@@ -335,6 +338,7 @@ impl Immagine {
         self.timeline_placed.set(false);
         self.albums = Default::default();
         self.people = Default::default();
+        self.search = Default::default();
         self.viewer = None;
         self.tab = 0;
         self.screen = Screen::Login;
@@ -420,6 +424,7 @@ impl Immagine {
         }
         let list = |h: &UniformListScrollHandle| h.0.borrow().base_handle.clone();
         Some(match self.tab {
+            0 if self.search.open => list(&self.search.scroll),
             0 => match self.range_mode {
                 0 => list(&self.years_scroll),
                 1 => list(&self.months_scroll),
@@ -445,6 +450,7 @@ impl Render for Immagine {
         let content = match self.screen {
             Screen::Loading => div().into_any_element(),
             Screen::Login => self.login_view(&p, cx).into_any_element(),
+            Screen::Timeline if self.tab == 0 && self.search.open => self.search_view(&p, window, cx),
             Screen::Timeline if self.tab == 0 => match self.range_mode {
                 0 => self.years_view(&p, window, cx),
                 1 => self.months_view(&p, window, cx),
@@ -457,7 +463,14 @@ impl Render for Immagine {
         // gone while the viewer is open, the viewer's own glass sees the photo instead of the grid.
         let viewer_open = self.viewer.as_ref().is_some_and(|v| !v.closing);
         self.sync_range_bar(viewer_open, cx);
-        let chrome = (self.screen == Screen::Timeline && !viewer_open).then(|| self.bars(&p, window, cx));
+        let searching = self.tab == 0 && self.search.open;
+        let chrome = (self.screen == Screen::Timeline && !viewer_open).then(|| {
+            if searching {
+                vec![self.search_bar(&p, window, cx)]
+            } else {
+                self.bars(&p, window, cx)
+            }
+        });
         let viewer = if self.screen == Screen::Timeline { self.viewer_overlay(window, cx) } else { None };
         div()
             .size_full()

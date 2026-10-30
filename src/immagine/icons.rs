@@ -42,6 +42,7 @@ pub(super) enum Glyph {
     Sliders,
     Trash,
     Search,
+    Close,
 }
 
 /// A `Glyph` of `size` px, stroked in `color`.
@@ -92,6 +93,10 @@ pub(super) fn glyph(kind: Glyph, size: f32, color: Rgba) -> Canvas<()> {
                 Glyph::Search => {
                     stroke(&circle(10.5, 10.5, 6.8), window);
                     stroke(&[(15.5, 15.5), (21., 21.)], window);
+                }
+                Glyph::Close => {
+                    stroke(&[(5., 5.), (19., 19.)], window);
+                    stroke(&[(19., 5.), (5., 19.)], window);
                 }
                 Glyph::Trash => {
                     stroke(&[(3.5, 6.), (20.5, 6.)], window);

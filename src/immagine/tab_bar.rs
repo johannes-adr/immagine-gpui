@@ -277,7 +277,12 @@ impl Immagine {
                             // Not while the bars swap: the tab bar's layer owns the press then.
                             .children(with_circle.then(|| input_layer(cx.weak_entity(), Bar::Range, true))),
                     )
-                    .child(round("range-search").child(glyph(Glyph::Search, 26., label))),
+                    .child(
+                        round("range-search")
+                            .active(|s| s.opacity(0.6))
+                            .on_click(cx.listener(|this, _, window, cx| this.open_search(window, cx)))
+                            .child(glyph(Glyph::Search, 26., label)),
+                    ),
             )
             .into_any_element()
     }
