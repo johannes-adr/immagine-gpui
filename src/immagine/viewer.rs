@@ -91,7 +91,7 @@ pub(super) struct Viewer {
     snap: Option<Snap>,
     /// Controls' visibility when closing began, and when it did: they fade out over the first part of the morph.
     chrome0: f32,
-    close_at: f64,
+    pub(super) close_at: f64,
     /// A drag just ended: the next render cancels the scroll coast GPUI starts from the same finger.
     stop_momentum: Cell<bool>,
     zoom: f32,
@@ -534,7 +534,7 @@ impl Immagine {
         if closing {
             let t = ((now - v.close_at) / (CLOSE_MS as f64 * 0.5)).clamp(0., 1.) as f32;
             k = v.chrome0 * (1. - t);
-            if k > 0. {
+            if now - v.close_at < CLOSE_MS as f64 {
                 window.request_animation_frame();
             }
         }

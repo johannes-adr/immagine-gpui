@@ -1,7 +1,7 @@
 use super::Immagine;
-use crate::components::glass::glass_div;
+use crate::components::glass::glass_div_faded;
 use crate::theme::{Palette, BLUE};
-use crate::util::{anim, lerp, now_ms, spring_out};
+use crate::util::{lerp, now_ms, spring_out};
 use gpui_kit::*;
 use std::time::Duration;
 
@@ -95,10 +95,20 @@ impl Immagine {
             None if now_ms() - self.thumb_at > THUMB_MS => (self.tab as f32, self.tab as f32, 0., 0.),
             None => (self.tab_from, self.tab as f32, self.bubble_from, 0.),
         };
-        let thumb = glass_div(p.bar_tint, 28.)
+        // While a photo closes the bar appears in step with the grid showing through: the same ease-out as the
+        // viewer's backdrop. Glass has no opacity, so its effects and the contents are scaled by `k`.
+        let k = match self.viewer.as_ref().filter(|v| v.closing) {
+            Some(v) => {
+                let x = ((now_ms() - v.close_at) / super::viewer::CLOSE_MS as f64).clamp(0., 1.) as f32;
+                1. - (1. - x).powi(5)
+            }
+            None => 1.,
+        };
+        let fade = |c: Rgba| Rgba { a: c.a * k, ..c };
+        let thumb = glass_div_faded(p.bar_tint, 28., k)
             .id(("thumb", self.thumb_gen))
             .absolute()
-            .bg(p.tab_thumb)
+            .bg(fade(p.tab_thumb))
             .with_animation(
                 ("thumb-anim", self.thumb_gen),
                 Animation::new(Duration::from_millis(THUMB_MS as u64)).with_easing(spring_out),
@@ -114,7 +124,7 @@ impl Immagine {
             _ => self.tab,
         };
 
-        let color = |ix: usize| -> Rgba { if shown == ix { rgb(BLUE).into() } else { p.tab_inactive } };
+        let color = |ix: usize| -> Rgba { fade(if shown == ix { rgb(BLUE).into() } else { p.tab_inactive }) };
         let photo_icon = |c: Rgba| {
             div()
                 .size(px(24.))
@@ -173,13 +183,11 @@ impl Immagine {
                 )
         };
 
-        // After a photo closes, the bar slides up from below while the photo shrinks (glass cannot fade).
-        let sliding = self.viewer.as_ref().filter(|v| v.closing).map(|v| v.serial);
-        let wrapper = div().id(("tabbar", sliding.unwrap_or(0))).absolute().left_0().right_0().bottom_0().h(px(64. + bottom + 14.)).occlude();
+        let wrapper = div().id("tabbar").absolute().left_0().right_0().bottom_0().h(px(64. + bottom + 14.)).occlude();
         let wrapper = wrapper
             .child(
                 div().absolute().left(px(20.)).right(px(20.)).bottom(px(bottom)).child(
-                    glass_div(p.bar_tint, 32.).h(px(64.)).p(px(4.)).child(div().relative().size_full().child(thumb)),
+                    glass_div_faded(p.bar_tint, 32., k).h(px(64.)).p(px(4.)).child(div().relative().size_full().child(thumb)),
                 ),
             )
             .child(
@@ -195,12 +203,7 @@ impl Immagine {
                     .child(item(2, person_icon(color(2))))
                     .child(input_layer(cx.weak_entity())),
             );
-        match sliding {
-            Some(serial) => wrapper
-                .with_animation(("tabbar-in", serial), anim(super::viewer::CLOSE_MS), move |el, d| el.bottom(px(-(1. - d) * (96. + bottom))))
-                .into_any_element(),
-            None => wrapper.into_any_element(),
-        }
+        wrapper.into_any_element()
     }
 }
 
