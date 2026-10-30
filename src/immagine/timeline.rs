@@ -90,7 +90,7 @@ impl Immagine {
         .track_scroll(&handle)
         .size_full();
         // The list's on-screen box, so the closing viewer can clip its shrinking photo to it.
-        div().flex_1().relative().child(list).child(canvas(move |bounds, _, _| grid_bounds.set(bounds), |_, _, _, _| {}).absolute().size_full())
+        div().flex_1().relative().child(list).child(canvas(move |bounds, _, _| grid_bounds.set(bounds), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
     }
 
     pub(super) fn timeline_view(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
