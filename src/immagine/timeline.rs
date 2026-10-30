@@ -192,11 +192,13 @@ impl Immagine {
         } else if o.value != 0. || o.mode != Mode::Rest {
             window.cancel_touch_momentum();
             true
-        } else if outward && dy != 0. {
-            // A fling ran into the end: one small bounce, scaled by its speed.
+        } else if dy != 0. && (offset + dy > 0.5 || offset + dy < -max - 0.5) {
+            // A fling reaches (or is at) an end with this step: one small bounce, scaled by its speed. The list still
+            // takes the step, which it clamps at the end.
             window.cancel_touch_momentum();
-            o.mode = Mode::Kick { at: now, amp: (dy * 6.).clamp(-90., 90.).signum() * (dy * 6.).abs().clamp(20., 90.) };
-            true
+            o.mode = Mode::Kick { at: now, amp: (dy * 6.).abs().clamp(20., 90.) * dy.signum() };
+            cx.notify();
+            false
         } else {
             false
         };
@@ -218,18 +220,21 @@ impl Immagine {
             Mode::Kick { at, amp } if now - at >= KICK_MS => o.mode = Mode::Back { at: at + KICK_MS, from: amp },
             _ => {}
         }
-        o.value = match o.mode {
+        // Done is decided by the clock, not by the value: a bounce starts at 0.
+        let done;
+        (o.value, done) = match o.mode {
             Mode::Kick { at, amp } => {
-                let t = ((now - at) / KICK_MS) as f32;
-                amp * (1. - (1. - t).powi(2))
+                let t = (((now - at) / KICK_MS) as f32).clamp(0., 1.);
+                (amp * (1. - (1. - t).powi(2)), false)
             }
             Mode::Back { at, from } => {
                 let t = ((now - at) / BOUNCE_MS).clamp(0., 1.) as f32;
-                from * (1. - t).powi(3)
+                (from * (1. - t).powi(3), t >= 1.)
             }
-            _ => o.value,
+            _ => (o.value, o.value == 0.),
         };
-        if o.value == 0. {
+        if done {
+            o.value = 0.;
             o.mode = Mode::Rest;
         } else {
             window.request_animation_frame();
