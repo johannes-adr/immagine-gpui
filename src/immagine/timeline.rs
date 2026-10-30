@@ -183,15 +183,26 @@ impl Immagine {
                 used = true;
             }
             if !o.down && o.value != 0. {
-                // The finger lifted with the band out: spring back, and the fling it started must not move the list.
+                // The finger lifted with the band out: spring back. The fling it started is judged event by event
+                // below: pushing on is cancelled, coming back toward the content just scrolls it.
                 o.mode = Mode::Back { at: now, from: o.value };
-                window.cancel_touch_momentum();
                 used = true;
             }
             used
         } else if o.value != 0. || o.mode != Mode::Rest {
-            window.cancel_touch_momentum();
-            true
+            // Coasting while the band is out or springing: pushing farther out is cancelled, coasting back toward
+            // the content goes through to the list.
+            let out = match o.mode {
+                Mode::Back { from, .. } => from,
+                Mode::Kick { amp, .. } => amp,
+                _ => o.value,
+            };
+            if dy != 0. && (dy > 0.) == (out > 0.) {
+                window.cancel_touch_momentum();
+                true
+            } else {
+                false
+            }
         } else if dy != 0. && (offset + dy > 0.5 || offset + dy < -max - 0.5) {
             // A fling reaches (or is at) an end with this step: one small bounce, scaled by its speed. The list still
             // takes the step, which it clamps at the end.
