@@ -30,8 +30,8 @@ const CLOSE_SCALE: f32 = 0.82;
 /// ... or a quick downward flick (px per move event) after at least this much travel.
 const FLICK_SPEED: f32 = 14.;
 /// Length of the open and close morphs. Long on purpose for now, to follow them by eye; ~400 is the usual feel.
-pub(super) const OPEN_MS: u64 = 800;
-pub(super) const CLOSE_MS: u64 = 800;
+pub(super) const OPEN_MS: u64 = 2500;
+pub(super) const CLOSE_MS: u64 = 2500;
 /// Black strip between neighbouring photos while swiping, so their edges stay apart.
 const PAGE_GAP: f32 = 20.;
 const MAX_ZOOM: f32 = 6.;
