@@ -24,8 +24,12 @@ const AUDIO_AHEAD_US: i64 = 2_000_000;
 /// Read-ahead: sample bytes are requested this far (media time) and this many video bytes past the feed position.
 const READ_AHEAD_US: i64 = 10_000_000;
 const READ_AHEAD_BYTES: u64 = 8 * 1024 * 1024;
-/// Cached bytes older than this behind the playhead are dropped.
-const KEEP_BEHIND_US: i64 = 30_000_000;
+/// Loaded bytes stay in memory (so jumping back and forth costs nothing) until they exceed this budget; then the
+/// spans farthest from the playhead go. Files bigger than the budget are also written to disk (`DISK_DB`) as they
+/// arrive, and what was evicted is read back from there instead of downloaded again.
+const MEM_BUDGET: u64 = 96 * 1024 * 1024;
+const MEM_KEEP: u64 = MEM_BUDGET * 3 / 4;
+const DISK_DB: &str = "video-cache";
 /// Consecutive failed range requests before the player gives up, and the pause between tries.
 const MAX_FAILURES: u32 = 3;
 const RETRY_MS: f64 = 1000.;
@@ -50,6 +54,8 @@ struct Opened {
 struct RangeDone {
     serial: u64,
     start: u64,
+    /// Read back from the disk cache, not downloaded: a failure only forgets that span.
+    disk: bool,
     result: Result<Vec<u8>, String>,
 }
 
@@ -59,6 +65,8 @@ struct Inbox {
     opened: Option<Result<Opened, String>>,
     frames: Vec<(i64, Decoded)>,
     ranges: Vec<RangeDone>,
+    /// Spans (start, length) that finished writing to the disk cache.
+    written: Vec<(u64, u64)>,
 }
 
 fn load_error(e: impl std::fmt::Display) -> String {
@@ -119,6 +127,8 @@ pub(super) struct Player {
     /// Loaded file bytes; samples are cut from here, missing ones are requested by range.
     cache: ByteCache,
     total: u64,
+    /// Spans of the disk cache: start -> length (only used when the file is bigger than `MEM_BUDGET`).
+    disk: std::collections::BTreeMap<u64, u64>,
     /// Tags the one request in flight (`None` = idle); a seek bumps it so the answer no longer counts as awaited.
     serial: u64,
     inflight: Option<u64>,
@@ -167,6 +177,11 @@ impl Player {
         let inbox = Rc::new(RefCell::new(Inbox::default()));
         let task_inbox = inbox.clone();
         let task_url = url.clone();
+        // Spans of an earlier video are of no use now.
+        cx.spawn(async move |_, _| {
+            let _ = H::blob_clear(DISK_DB).await;
+        })
+        .detach();
         cx.spawn(async move |this, cx| {
             let opened = open_movie(&task_url, cx).await;
             task_inbox.borrow_mut().opened = Some(opened);
@@ -180,6 +195,7 @@ impl Player {
             url,
             cache: ByteCache::new(),
             total: 0,
+            disk: Default::default(),
             serial: 0,
             inflight: None,
             failures: 0,
@@ -283,6 +299,9 @@ impl Player {
         }
         let (opened, frames, ranges) = {
             let mut inbox = self.inbox.borrow_mut();
+            for (start, len) in std::mem::take(&mut inbox.written) {
+                self.disk.insert(start, len);
+            }
             (inbox.opened.take(), std::mem::take(&mut inbox.frames), std::mem::take(&mut inbox.ranges))
         };
         if let Some(result) = opened {
@@ -347,6 +366,9 @@ impl Player {
             let awaited = self.inflight == Some(done.serial);
             match done.result {
                 Ok(bytes) => {
+                    if !done.disk && self.total > MEM_BUDGET {
+                        self.spill(done.start, &bytes);
+                    }
                     self.cache.insert(done.start, bytes);
                     if awaited {
                         self.failures = 0;
@@ -358,6 +380,10 @@ impl Player {
                     if self.failures >= MAX_FAILURES {
                         self.status = Status::Failed(load_error(e));
                     }
+                }
+                Err(_) if done.disk => {
+                    // The disk cache lost it (cleared, quota): ask the server next time.
+                    self.disk.remove(&done.start);
                 }
                 Err(_) => {}
             }
@@ -373,7 +399,7 @@ impl Player {
         if movie.is_legacy() || self.status != Status::Ready {
             return;
         }
-        self.cache.evict_before(movie.offset_at(at - KEEP_BEHIND_US));
+        self.cache.evict_far(movie.offset_at(at), MEM_KEEP);
         if self.inflight.is_some() || now < self.retry_at {
             return;
         }
@@ -384,14 +410,42 @@ impl Player {
         let serial = self.serial;
         self.inflight = Some(serial);
         let (url, inbox) = (self.url.clone(), self.inbox.clone());
+        // Evicted earlier but kept on disk: read that span back instead of downloading it again.
+        if let Some((&s, &len)) = self.disk.range(..=start).next_back().filter(|(s, l)| **s + **l > start) {
+            self.app
+                .spawn(async move |cx| {
+                    let result = match H::blob_get(DISK_DB, &s.to_string()).await {
+                        Ok(Some(bytes)) if bytes.len() as u64 == len => Ok(bytes),
+                        Ok(_) => Err("fehlt".to_string()),
+                        Err(e) => Err(e),
+                    };
+                    inbox.borrow_mut().ranges.push(RangeDone { serial, start: s, disk: true, result });
+                    cx.refresh();
+                })
+                .detach();
+            return;
+        }
         self.app
             .spawn(async move |cx| {
                 let result = H::fetch_range(&url, start, end - 1).await.and_then(|r| {
                     // A server that starts ignoring Range mid-way answers with the whole file; take the slice.
                     if r.partial { Ok(r.bytes) } else { r.bytes.get(start as usize..(end as usize).min(r.bytes.len())).map(|b| b.to_vec()).ok_or_else(|| "kein Range".to_string()) }
                 });
-                inbox.borrow_mut().ranges.push(RangeDone { serial, start, result });
+                inbox.borrow_mut().ranges.push(RangeDone { serial, start, disk: false, result });
                 cx.refresh();
+            })
+            .detach();
+    }
+
+    /// Writes a downloaded span to the disk cache in the background; it counts as cached once the write is done.
+    fn spill(&self, start: u64, bytes: &[u8]) {
+        let (bytes, inbox) = (bytes.to_vec(), self.inbox.clone());
+        self.app
+            .spawn(async move |_| {
+                let len = bytes.len() as u64;
+                if H::blob_put(DISK_DB, &start.to_string(), &bytes).await.is_ok() {
+                    inbox.borrow_mut().written.push((start, len));
+                }
             })
             .detach();
     }

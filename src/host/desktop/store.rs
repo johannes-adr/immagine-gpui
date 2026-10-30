@@ -21,6 +21,19 @@ pub fn blob_path(db: &str, key: &str) -> PathBuf {
     data_dir().join(format!("{}-{}.bin", file_name(db), file_name(key)))
 }
 
+/// Removes every blob file of `db`.
+pub fn blob_clear(db: &str) {
+    let prefix = format!("{}-", file_name(db));
+    if let Ok(entries) = std::fs::read_dir(data_dir()) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with(&prefix) && name.ends_with(".bin") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
 fn setting_path(key: &str) -> PathBuf {
     data_dir().join("settings").join(file_name(key))
 }

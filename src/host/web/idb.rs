@@ -69,3 +69,12 @@ pub async fn get(db_name: &str, key: &str) -> Result<Option<Vec<u8>>, String> {
     db.close();
     Ok(if value.is_undefined() { None } else { Some(Uint8Array::new(&value).to_vec()) })
 }
+
+pub async fn clear(db_name: &str) -> Result<(), String> {
+    let db = open(db_name).await?;
+    let tx = db.transaction_with_str_and_mode(STORE, IdbTransactionMode::Readwrite).map_err(err)?;
+    tx.object_store(STORE).map_err(err)?.clear().map_err(err)?;
+    once(&tx, "complete", "error").await.map_err(err)?;
+    db.close();
+    Ok(())
+}

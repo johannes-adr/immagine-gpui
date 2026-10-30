@@ -101,6 +101,10 @@ impl Host for Web {
         idb::put(db, key, bytes).await
     }
 
+    async fn blob_clear(db: &str) -> Result<(), String> {
+        idb::clear(db).await
+    }
+
     async fn decode_url(url: &str) -> Result<Decoded, String> {
         image_loader::decode_url(url).await
     }

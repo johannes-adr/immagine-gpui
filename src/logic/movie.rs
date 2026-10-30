@@ -173,6 +173,28 @@ impl ByteCache {
         None
     }
 
+    /// Drops the spans farthest from `center` (a file position) until at most `keep` bytes are left; the span
+    /// holding `center` always stays.
+    pub fn evict_far(&mut self, center: u64, keep: u64) {
+        let mut total = self.len();
+        if total <= keep {
+            return;
+        }
+        let dist = |s: u64, len: usize| {
+            let (a, b) = (s, s + len as u64);
+            if center < a { a - center } else if center >= b { center - b + 1 } else { 0 }
+        };
+        let mut order: Vec<(u64, u64, usize)> = self.spans.iter().map(|(s, v)| (dist(*s, v.len()), *s, v.len())).collect();
+        order.sort_unstable_by(|a, b| b.cmp(a));
+        for (d, start, len) in order {
+            if total <= keep || d == 0 {
+                break;
+            }
+            self.spans.remove(&start);
+            total -= len as u64;
+        }
+    }
+
     /// Drops spans that end at or before `pos` (data behind the playhead).
     pub fn evict_before(&mut self, pos: u64) {
         let old: Vec<u64> = self.spans.iter().filter(|(s, v)| **s + v.len() as u64 <= pos).map(|(s, _)| *s).collect();
@@ -797,6 +819,21 @@ mod tests {
         assert_eq!(c.read(5, 10).unwrap().len(), 10);
         c.evict_before(36);
         assert!(!c.has(10, 1) && c.has(36, 4));
+    }
+
+    #[test]
+    fn evict_far_keeps_the_nearest_spans_within_budget() {
+        let mut c = ByteCache::new();
+        for i in 0..10u64 {
+            c.insert(i * 100, vec![0; 100]);
+        }
+        c.evict_far(450, 300);
+        assert_eq!(c.len(), 300);
+        assert!(c.has(400, 100), "span at the center stays");
+        assert!(c.has(300, 100) && c.has(500, 100));
+        assert!(!c.has(0, 1) && !c.has(900, 1));
+        c.evict_far(450, 0);
+        assert!(c.has(400, 100) && c.len() == 100, "the center span is never dropped");
     }
 
     #[test]

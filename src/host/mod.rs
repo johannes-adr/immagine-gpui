@@ -135,6 +135,8 @@ pub trait Host: 'static {
     /// Large opaque blobs (the store snapshot), namespaced by `db`.
     async fn blob_get(db: &str, key: &str) -> Result<Option<Vec<u8>>, String>;
     async fn blob_put(db: &str, key: &str, bytes: &[u8]) -> Result<(), String>;
+    /// Deletes every blob of `db`.
+    async fn blob_clear(db: &str) -> Result<(), String>;
 
     /// Downloads an image with the session's credentials and decodes it to pixels.
     async fn decode_url(url: &str) -> Result<Decoded, String>;

@@ -86,6 +86,15 @@ impl Host for Desktop {
         .await
     }
 
+    async fn blob_clear(db: &str) -> Result<(), String> {
+        let db = db.to_string();
+        blocking::run(move || {
+            store::blob_clear(&db);
+            Ok(())
+        })
+        .await
+    }
+
     async fn blob_put(db: &str, key: &str, bytes: &[u8]) -> Result<(), String> {
         let path = store::blob_path(db, key);
         let bytes = bytes.to_vec();
