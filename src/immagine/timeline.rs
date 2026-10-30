@@ -9,25 +9,31 @@ use gpui_kit::*;
 use std::rc::Rc;
 
 const GAP: f32 = 2.;
-/// How far the timeline can be pulled past its ends, and how long it takes to spring back.
+/// How far the timeline can be pulled past its ends, how long it takes to spring back, and how long the small
+/// bounce takes to its peak when a fling runs into an end.
 const MAX_OVERSCROLL: f32 = 150.;
 const BOUNCE_MS: f64 = 380.;
-/// The finger counts as lifted when no scroll event arrived for this long.
-const QUIET_MS: f64 = 70.;
-/// Coasting from a fling may keep the band out this long before it springs back.
-const COAST_MS: f64 = 110.;
+const KICK_MS: f64 = 110.;
 
-/// Rubber band state: the offset past the end (positive pulls the content down), when the last scroll event
-/// came in and, once released, when the spring-back began and from where.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum Mode {
+    #[default]
+    Rest,
+    /// The finger drags the band.
+    Drag,
+    /// Easing back to rest from `from`, started at `at`.
+    Back { at: f64, from: f32 },
+    /// A fling ran into the end: a small bounce of height `amp`, then back.
+    Kick { at: f64, amp: f32 },
+}
+
+/// Rubber band state: the offset past the end (positive pulls the content down) and what drives it. Only a finger
+/// moves the band; the coasting that follows a fling is cancelled at an end and never adds to it.
 #[derive(Clone, Copy, Default)]
 pub(super) struct Over {
     value: f32,
-    last: f64,
-    from: f32,
-    released_at: f64,
-    /// A finger is on the screen (between the start and the end of a pan), and since when the band is out.
     down: bool,
-    since: f64,
+    mode: Mode,
 }
 
 impl Immagine {
@@ -145,87 +151,90 @@ impl Immagine {
         div().flex_1().relative().child(list).child(canvas(move |bounds, _, _| grid_bounds.set(bounds), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
     }
 
-    /// Called for every scroll event before the list sees it (capture phase). Returns true when the event was used up
-    /// by the rubber band: the list is at an end and the finger pushes on, or the band is pulled out and the finger
-    /// comes back.
-    pub(super) fn overscroll_event(&mut self, dy: f32, phase: TouchPhase, cx: &mut Context<Self>) -> bool {
+    /// Called for every touch scroll event before the list sees it (capture phase). Returns true when the event was
+    /// used up by the rubber band.
+    pub(super) fn overscroll_event(&mut self, dy: f32, phase: TouchPhase, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let mut o = self.overscroll.get();
+        if phase == TouchPhase::Started {
+            o.down = true;
+        }
+        // Momentum is synthesized after the finger lifted, so it arrives while `down` is already false.
+        let finger = o.down;
+        if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+            o.down = false;
+        }
+        self.overscroll.set(o);
         if self.tab != 0 || self.screen != super::Screen::Timeline || self.viewer.as_ref().is_some_and(|v| !v.closing) {
             return false;
         }
         let handle = self.timeline_scroll.0.borrow().base_handle.clone();
         let (offset, max): (f32, f32) = (handle.offset().y.into(), handle.max_offset().y.into());
-        let (at_top, at_bottom) = (offset >= -0.5, offset <= -max + 0.5);
-        let mut o = self.overscroll.get();
+        let outward = (offset >= -0.5 && dy > 0.) || (offset <= -max + 0.5 && dy < 0.);
         let now = now_ms();
-        let fresh = phase == TouchPhase::Started;
-        match phase {
-            TouchPhase::Started => o.down = true,
-            TouchPhase::Ended | TouchPhase::Cancelled => {
-                o.down = false;
-                // The finger lifted: spring back at once, the coasting that follows is swallowed.
-                if o.value != 0. && o.released_at == 0. {
-                    o.released_at = now;
-                    o.from = o.value;
-                }
+        let used = if finger {
+            let mut used = false;
+            if o.value != 0. || (outward && dy != 0.) {
+                // Pushing on gets harder the farther out it is; coming back is one to one.
+                let moving_out = o.value == 0. || (o.value > 0.) == (dy > 0.);
+                let step = if moving_out { dy * 0.5 / (1. + o.value.abs() / 90.) } else { dy };
+                let next = o.value + step;
+                o.value = if o.value != 0. && (next > 0.) != (o.value > 0.) { 0. } else { next.clamp(-MAX_OVERSCROLL, MAX_OVERSCROLL) };
+                o.mode = Mode::Drag; // also takes over a band that was springing back
+                used = true;
             }
-            TouchPhase::Moved => {}
-        }
-        // Coasting (no finger) may push the band out for a moment, then it springs back.
-        if !o.down && o.value != 0. && o.released_at == 0. && now - o.since > COAST_MS {
-            o.released_at = now;
-            o.from = o.value;
-        }
+            if !o.down && o.value != 0. {
+                // The finger lifted with the band out: spring back, and the fling it started must not move the list.
+                o.mode = Mode::Back { at: now, from: o.value };
+                window.cancel_touch_momentum();
+                used = true;
+            }
+            used
+        } else if o.value != 0. || o.mode != Mode::Rest {
+            window.cancel_touch_momentum();
+            true
+        } else if outward && dy != 0. {
+            // A fling ran into the end: one small bounce, scaled by its speed.
+            window.cancel_touch_momentum();
+            o.mode = Mode::Kick { at: now, amp: (dy * 2.).clamp(-60., 60.) };
+            true
+        } else {
+            false
+        };
         self.overscroll.set(o);
-        if dy == 0. {
-            return o.released_at != 0. && o.value != 0. && !fresh;
+        if used {
+            cx.notify();
         }
-        // While it springs back, the coasting of the last fling is swallowed (it would fight the spring); only a
-        // new touch takes the band over again.
-        if o.released_at != 0. && o.value != 0. && !fresh {
-            return true;
-        }
-        let pulled = o.value != 0.;
-        let outward = (at_top && dy > 0.) || (at_bottom && dy < 0.);
-        if !pulled && !outward {
-            return false;
-        }
-        // Pushing on gets harder the farther out it is; coming back is one to one.
-        let moving_out = o.value == 0. || (o.value > 0.) == (dy > 0.);
-        let step = if moving_out { dy * 0.5 / (1. + o.value.abs() / 90.) } else { dy };
-        let next = o.value + step;
-        if o.value == 0. {
-            o.since = now;
-        }
-        o.value = if o.value != 0. && (next > 0.) != (o.value > 0.) { 0. } else { next.clamp(-MAX_OVERSCROLL, MAX_OVERSCROLL) };
-        o.last = now;
-        o.released_at = 0.;
-        self.overscroll.set(o);
-        cx.notify();
-        true
+        used
     }
 
-    /// Springs the band back once the finger is gone; asks for frames until it is at rest.
+    /// Advances the spring-back and bounce from the clock; asks for frames until the band is at rest.
     pub(super) fn overscroll_tick(&self, window: &mut Window) {
         let mut o = self.overscroll.get();
-        if o.value == 0. {
-            return;
-        }
         let now = now_ms();
-        if o.released_at == 0. {
-            if now - o.last < QUIET_MS {
-                window.request_animation_frame();
-                return;
-            }
-            o.released_at = now;
-            o.from = o.value;
+        match o.mode {
+            Mode::Rest => return,
+            Mode::Drag if o.down => return,
+            Mode::Drag => o.mode = Mode::Back { at: now, from: o.value },
+            Mode::Kick { at, amp } if now - at >= KICK_MS => o.mode = Mode::Back { at: at + KICK_MS, from: amp },
+            _ => {}
         }
-        let t = ((now - o.released_at) / BOUNCE_MS).clamp(0., 1.) as f32;
-        let e = 1. - (1. - t).powi(3);
-        o.value = if t >= 1. { 0. } else { o.from * (1. - e) };
-        self.overscroll.set(o);
-        if o.value != 0. {
+        o.value = match o.mode {
+            Mode::Kick { at, amp } => {
+                let t = ((now - at) / KICK_MS) as f32;
+                amp * (1. - (1. - t).powi(2))
+            }
+            Mode::Back { at, from } => {
+                let t = ((now - at) / BOUNCE_MS).clamp(0., 1.) as f32;
+                from * (1. - t).powi(3)
+            }
+            _ => o.value,
+        };
+        if o.value == 0. {
+            o.mode = Mode::Rest;
+        } else {
             window.request_animation_frame();
         }
+        self.overscroll.set(o);
     }
 
     pub(super) fn timeline_view(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -295,12 +304,12 @@ fn overscroll_input(view: WeakEntity<Immagine>) -> Canvas<()> {
         |_, _, _| {},
         move |_, _, window, _| {
             let view = view.clone();
-            window.on_mouse_event(move |e: &ScrollWheelEvent, phase, _, cx| {
-                if phase != DispatchPhase::Capture {
+            window.on_mouse_event(move |e: &ScrollWheelEvent, phase, window, cx| {
+                if phase != DispatchPhase::Capture || e.source != ScrollSource::Touch {
                     return;
                 }
                 let dy: f32 = e.delta.pixel_delta(px(16.)).y.into();
-                if view.update(cx, |t, cx| t.overscroll_event(dy, e.touch_phase, cx)).unwrap_or(false) {
+                if view.update(cx, |t, cx| t.overscroll_event(dy, e.touch_phase, window, cx)).unwrap_or(false) {
                     cx.stop_propagation();
                 }
             });
