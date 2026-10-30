@@ -95,8 +95,17 @@ pub(crate) struct Immagine {
     timeline_placed: std::cell::Cell<bool>,
     /// Columns of the timeline grid (a step of `ZOOM_LEVELS`), the pinch scale gathered since the last step, the
     /// photos (first, last index) the grid built last, and the span the header shows.
+    /// Settled columns of the timeline grid (0 = not chosen yet: 3 on phones, 5 on wide screens).
     grid_cols: usize,
-    grid_scale: f32,
+    /// Columns shown right now (fractional while pinching or settling), see `timeline.rs`.
+    grid_f: f32,
+    grid_from: usize,
+    grid_anchor: usize,
+    grid_pinching: bool,
+    /// (start, columns at start, target level) of the settle animation after a pinch.
+    grid_anim: Option<(f64, f32, usize)>,
+    /// Last ctrl+wheel (trackpad pinch in browsers); a pause settles the gesture.
+    grid_wheel_at: f64,
     visible: Rc<std::cell::Cell<(usize, usize)>>,
     header_span: std::cell::Cell<(usize, usize)>,
     /// Rubber band shared by every scroll view (timeline, albums, people, their pages).
@@ -204,8 +213,13 @@ impl Immagine {
             swap_gen: 0,
             timeline_scroll: UniformListScrollHandle::new(),
             timeline_placed: std::cell::Cell::new(false),
-            grid_cols: 3,
-            grid_scale: 1.,
+            grid_cols: 0,
+            grid_f: 3.,
+            grid_from: 3,
+            grid_anchor: 0,
+            grid_pinching: false,
+            grid_anim: None,
+            grid_wheel_at: 0.,
             visible: Rc::new(std::cell::Cell::new((0, 0))),
             header_span: std::cell::Cell::new((0, 0)),
             rubber: Default::default(),
@@ -446,6 +460,8 @@ impl Render for Immagine {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::new(self.dark);
         self.rubber.tick(window);
+        self.grid_default(window.viewport_size().width.into());
+        self.grid_tick(window);
         let background = if self.dark { rgb(0x000000) } else { rgb(0xffffff) };
         let content = match self.screen {
             Screen::Loading => div().into_any_element(),
@@ -479,6 +495,7 @@ impl Render for Immagine {
             .bg(background)
             .text_color(p.label)
             .child(content)
+            .child(self.grid_input(cx))
             .child(rubber_band::input(cx.weak_entity(), |this, dy, phase, window| {
                 let scroll = this.active_scroll();
                 this.rubber.event(dy, phase, scroll.as_ref(), window)

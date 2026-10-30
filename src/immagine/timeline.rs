@@ -2,7 +2,7 @@
 
 use super::{thumbs, Immagine, Screen};
 use crate::host::Pinch;
-use crate::logic::grid::layout::zoom_level_step;
+use crate::logic::grid::layout::ZOOM_LEVELS;
 use crate::components::glass::glass_blur;
 use crate::theme::Palette;
 use crate::logic::models::timeline::TimelineItem;
@@ -12,6 +12,12 @@ use gpui_kit::*;
 use std::rc::Rc;
 
 const GAP: f32 = 2.;
+/// Window width from which the grid starts with 5 columns instead of 3 (iPad / desktop).
+const WIDE_VIEWPORT: f32 = 700.;
+/// How far (0..1, log scale between two levels) a pinch must go to take the next level when let go.
+const SNAP_AT: f32 = 0.3;
+const SETTLE_MS: f64 = 240.;
+const WHEEL_IDLE_MS: f64 = 140.;
 /// Columns from which the timeline shows month labels over the grid.
 const MONTH_LABEL_COLS: usize = 15;
 /// (year, month) of a photo, for spotting where a month starts.
@@ -20,33 +26,160 @@ fn month_of(item: &TimelineItem) -> Option<(i32, u32)> {
 }
 
 impl Immagine {
-    /// Two-finger pinch on the timeline grid: spreading steps to fewer, larger cells (5 -> 3 columns), pinching
-    /// to more (3 -> 5 -> 15). The photo in the middle of the screen stays there.
+    fn grid_active(&self) -> bool {
+        self.screen == Screen::Timeline && self.tab == 0 && self.range_mode == 2 && !self.search.open && self.viewer.is_none()
+    }
+
+    /// Two-finger pinch on the timeline grid (touch via `Host::install_gestures`): the cells follow the fingers
+    /// continuously; on release the grid settles on a column level (see `grid_release`).
     pub(super) fn grid_pinch(&mut self, event: Pinch, cx: &mut Context<Self>) {
-        if self.screen != Screen::Timeline || self.tab != 0 || self.range_mode != 2 {
+        if !self.grid_active() {
             return;
         }
         match event {
-            Pinch::Begin => self.grid_scale = 1.,
-            Pinch::Move { ratio, .. } => {
-                self.grid_scale *= ratio;
-                let zoom_out = if self.grid_scale < 0.8 {
-                    true
-                } else if self.grid_scale > 1.25 {
-                    false
-                } else {
-                    return;
-                };
-                self.grid_scale = 1.;
-                if let Some(cols) = zoom_level_step(self.grid_cols, zoom_out) {
-                    let (first, last) = self.visible.get();
-                    self.timeline_jump.set(Some((first + last) / 2));
-                    self.grid_cols = cols;
-                    cx.notify();
-                }
-            }
+            Pinch::Begin => self.grid_begin(),
+            Pinch::Move { ratio, .. } => self.grid_apply(ratio, cx),
+            Pinch::End => self.grid_release(cx),
             _ => {}
         }
+    }
+
+    /// Settled columns: chosen on first use from the width (3 on phones, 5 on iPad / desktop sizes).
+    pub(super) fn grid_default(&mut self, vw: f32) {
+        if self.grid_cols == 0 {
+            self.grid_cols = if vw >= WIDE_VIEWPORT { 5 } else { 3 };
+            self.grid_f = self.grid_cols as f32;
+        }
+    }
+
+    fn grid_begin(&mut self) {
+        if self.grid_pinching {
+            return;
+        }
+        self.grid_pinching = true;
+        self.grid_anim = None;
+        self.grid_from = ZOOM_LEVELS.iter().copied().min_by(|a, b| (*a as f32 - self.grid_f).abs().total_cmp(&(*b as f32 - self.grid_f).abs())).unwrap_or(3);
+        let (first, last) = self.visible.get();
+        self.grid_anchor = (first + last) / 2;
+    }
+
+    /// Spreading (ratio > 1) makes the cells larger: fewer columns.
+    fn grid_apply(&mut self, ratio: f32, cx: &mut Context<Self>) {
+        self.grid_begin();
+        let lo = ZOOM_LEVELS[0] as f32 * 0.85;
+        let hi = *ZOOM_LEVELS.last().unwrap() as f32 * 1.15;
+        self.grid_f = (self.grid_f / ratio.powf(1.2)).clamp(lo.max(1.), hi);
+        self.timeline_jump.set(Some(self.grid_anchor));
+        cx.notify();
+    }
+
+    /// Fingers lifted: settle on a level. Like swiping a page, the next level is only taken when the pinch went
+    /// past a critical point (`SNAP_AT` of the way, in log scale); letting go earlier springs back.
+    fn grid_release(&mut self, cx: &mut Context<Self>) {
+        self.grid_settle();
+        cx.notify();
+    }
+
+    fn grid_settle(&mut self) {
+        if !self.grid_pinching {
+            return;
+        }
+        self.grid_pinching = false;
+        self.grid_wheel_at = 0.;
+        let f = self.grid_f;
+        let from = self.grid_from as f32;
+        let lo = ZOOM_LEVELS.iter().copied().filter(|&l| l as f32 <= f).max().unwrap_or(ZOOM_LEVELS[0]);
+        let hi = ZOOM_LEVELS.iter().copied().filter(|&l| l as f32 >= f).min().unwrap_or(*ZOOM_LEVELS.last().unwrap());
+        let target = if lo == hi {
+            lo
+        } else {
+            let u = (f / lo as f32).ln() / (hi as f32 / lo as f32).ln();
+            if from <= lo as f32 {
+                if u >= SNAP_AT { hi } else { lo }
+            } else if u <= 1. - SNAP_AT {
+                lo
+            } else {
+                hi
+            }
+        };
+        self.grid_anim = Some((crate::util::now_ms(), f, target));
+    }
+
+    /// Advances the settle animation and ends a ctrl+wheel gesture after a pause.
+    pub(super) fn grid_tick(&mut self, window: &mut Window) {
+        let now = crate::util::now_ms();
+        if self.grid_wheel_at > 0. {
+            if now - self.grid_wheel_at > WHEEL_IDLE_MS {
+                self.grid_settle();
+            } else {
+                window.request_animation_frame();
+            }
+        }
+        if let Some((start, from, to)) = self.grid_anim {
+            let t = ((now - start) / SETTLE_MS).clamp(0., 1.) as f32;
+            let e = 1. - (1. - t).powi(3);
+            self.grid_f = from + (to as f32 - from) * e;
+            self.timeline_jump.set(Some(self.grid_anchor));
+            if t >= 1. {
+                self.grid_anim = None;
+                self.grid_cols = to;
+                self.grid_f = to as f32;
+            }
+            window.request_animation_frame();
+        }
+    }
+
+    /// Trackpad pinch and ctrl+wheel (desktop). Window listeners in the capture phase, so the list below never
+    /// sees a pinch as a scroll.
+    pub(super) fn grid_input(&self, cx: &mut Context<Self>) -> Canvas<()> {
+        let view = cx.weak_entity();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let v = view.clone();
+                window.on_mouse_event(move |e: &ScrollWheelEvent, phase, _, cx| {
+                    if phase != DispatchPhase::Capture || !e.modifiers.control || matches!(e.source, ScrollSource::Touch) {
+                        return;
+                    }
+                    let dy: f32 = e.delta.pixel_delta(px(16.)).y.into();
+                    let mut used = false;
+                    v.update(cx, |this, cx| {
+                        if this.grid_active() {
+                            used = true;
+                            this.grid_apply((-dy * 0.01).exp(), cx);
+                            this.grid_wheel_at = crate::util::now_ms();
+                        }
+                    })
+                    .ok();
+                    if used {
+                        cx.stop_propagation();
+                    }
+                });
+                let v = view.clone();
+                window.on_mouse_event(move |e: &PinchEvent, phase, _, cx| {
+                    if phase != DispatchPhase::Capture {
+                        return;
+                    }
+                    let (delta, touch) = (e.delta, e.phase);
+                    let mut used = false;
+                    v.update(cx, |this, cx| {
+                        if this.grid_active() {
+                            used = true;
+                            match touch {
+                                TouchPhase::Ended | TouchPhase::Cancelled => this.grid_release(cx),
+                                _ => this.grid_apply(1. + delta, cx),
+                            }
+                        }
+                    })
+                    .ok();
+                    if used {
+                        cx.stop_propagation();
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_0()
     }
 
     /// A virtualized, scrollable photo grid with a spacer for the tab bar at its end. Tapping a tile opens the
@@ -64,9 +197,13 @@ impl Immagine {
     ) -> Div {
         let vw: f32 = window.viewport_size().width.into();
         let timeline = scroll.1.is_some();
-        let columns = if timeline { self.grid_cols } else { ((vw / 120.).floor() as usize).clamp(3, 8) };
+        // The timeline's column count is fractional while pinching: cells have the exact size for `cols_f` columns
+        // and the last column of a row is cut off by the screen edge (it slides in as the cells shrink).
+        let cols_f = if timeline { self.grid_f.max(1.) } else { ((vw / 120.).floor() as usize).clamp(3, 8) as f32 };
+        let columns = cols_f.ceil() as usize;
         let gap = if columns >= MONTH_LABEL_COLS { 1. } else { GAP };
-        let cell = ((vw - gap * (columns as f32 - 1.)) / columns as f32).floor();
+        let cell = (vw - gap * (cols_f - 1.)) / cols_f;
+        let cell = if cols_f.fract() == 0. { cell.floor() } else { cell };
         let visible = self.visible.clone();
         let rows = items.len().div_ceil(columns);
         let items_empty = items.is_empty();

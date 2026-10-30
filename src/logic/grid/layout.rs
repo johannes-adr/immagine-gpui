@@ -8,7 +8,7 @@
 use std::ops::Range;
 
 /// Column counts a pinch steps through, fewest columns (largest cells) first.
-pub const ZOOM_LEVELS: [usize; 3] = [3, 5, 15];
+pub const ZOOM_LEVELS: [usize; 4] = [1, 3, 5, 15];
 /// Columns when nothing was stored yet.
 pub const DEFAULT_COLUMNS: usize = 5;
 /// 5 px on 3x screens (measured in Photos).
@@ -295,6 +295,9 @@ mod tests {
     fn grid_frames_are_contiguous_and_pixel_aligned() {
         let width = 402.0;
         for columns in ZOOM_LEVELS {
+            if columns == 1 {
+                continue; // a single column has no neighbour within the row
+            }
             let a = frame(0, width, columns, 2.0, 3.0);
             let b = frame(1, width, columns, 2.0, 3.0);
             let last = frame(columns - 1, width, columns, 2.0, 3.0);
@@ -326,8 +329,10 @@ mod tests {
         assert_eq!(zoom_level_step(15, true), None);
         assert_eq!(zoom_level_step(15, false), Some(5));
         assert_eq!(zoom_level_step(5, false), Some(3));
-        assert_eq!(zoom_level_step(3, false), None);
-        assert_eq!(zoom_level_step(7, true), Some(3), "unknown levels start at the first level");
+        assert_eq!(zoom_level_step(3, false), Some(1));
+        assert_eq!(zoom_level_step(1, false), None);
+        assert_eq!(zoom_level_step(1, true), Some(3));
+        assert_eq!(zoom_level_step(7, true), Some(1), "unknown levels start at the first level");
     }
 
     #[test]
