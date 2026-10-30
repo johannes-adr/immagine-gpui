@@ -76,7 +76,6 @@ impl Immagine {
     }
 
     pub(super) fn tab_bar(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let n = TABS.len() as f32;
         let slot = slot_width(window.viewport_size().width.into());
         // While dragging, the thumb sits at the finger and the bubble swells; on release it slides to its slot
         // while the bubble shrinks. One animation keyed by `thumb_gen` drives both, and re-rendering during the

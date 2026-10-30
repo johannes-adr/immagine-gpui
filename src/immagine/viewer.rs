@@ -29,9 +29,9 @@ const PAGE_FRACTION: f32 = 0.2;
 const CLOSE_SCALE: f32 = 0.82;
 /// ... or a quick downward flick (px per move event) after at least this much travel.
 const FLICK_SPEED: f32 = 14.;
-/// Length of the open and close morphs. Long on purpose for now, to follow them by eye; ~400 is the usual feel.
-pub(super) const OPEN_MS: u64 = 2500;
-pub(super) const CLOSE_MS: u64 = 2500;
+/// Length of the open and close morphs.
+pub(super) const OPEN_MS: u64 = 450;
+pub(super) const CLOSE_MS: u64 = 450;
 /// Black strip between neighbouring photos while swiping, so their edges stay apart.
 const PAGE_GAP: f32 = 20.;
 const MAX_ZOOM: f32 = 6.;
@@ -88,12 +88,9 @@ pub(super) struct Viewer {
     mode: DragMode,
     vel_y: f32,
     release: Option<Release>,
-    snap_id: u32,
     snap: Option<Snap>,
     /// A drag just ended: the next render cancels the scroll coast GPUI starts from the same finger.
     stop_momentum: Cell<bool>,
-    /// Set by the close animation when it has produced its final frame.
-    close_done: Rc<Cell<bool>>,
     zoom: f32,
     pan: (f32, f32),
     /// Two fingers are down: single-pointer drags are ignored.
@@ -156,7 +153,7 @@ impl Viewer {
 impl Immagine {
     /// Opens the viewer on `items[index]`, zooming out of the grid tile with that index if it was painted.
     pub(super) fn open_viewer(&mut self, items: Rc<Vec<TimelineItem>>, index: usize, cx: &mut Context<Self>) {
-        let from = self.fresh_tile(index);
+        let from = self.tile_bounds.borrow().get(&index).copied();
         self.viewer_serial += 1;
         self.viewer = Some(Viewer {
             items,
@@ -174,10 +171,8 @@ impl Immagine {
             mode: DragMode::None,
             vel_y: 0.,
             release: None,
-            snap_id: 0,
             snap: None,
             stop_momentum: Cell::new(false),
-            close_done: Rc::new(Cell::new(false)),
             zoom: 1.,
             pan: (0., 0.),
             pinching: false,
@@ -197,12 +192,6 @@ impl Immagine {
         cx.notify();
     }
 
-    /// The tile painted for item `index` within the last couple of render passes (older entries are stale).
-    fn fresh_tile(&self, index: usize) -> Option<Bounds<Pixels>> {
-        let now = self.render_pass.get();
-        self.tile_bounds.borrow().get(&index).filter(|(_, pass)| pass + 2 >= now).map(|(b, _)| *b)
-    }
-
     pub(super) fn close_viewer(&mut self, cx: &mut Context<Self>) {
         let Some(v) = self.viewer.as_mut() else { return };
         if v.closing {
@@ -216,32 +205,15 @@ impl Immagine {
         self.viewer_serial += 1;
         v.serial = self.viewer_serial;
         cx.notify();
-        // The viewer is removed once the render pass has drawn the last frame of the shrink (`close_done`), not on a
-        // wall-clock timer that can fire while slow frames have not yet reached the end. The timeout is a safety net.
-        let serial = v.serial;
         cx.spawn(async move |this, cx| {
-            let mut waited = 0;
-            loop {
-                cx.background_executor().timer(Duration::from_millis(16)).await;
-                waited += 16;
-                let finished = this
-                    .update(cx, |t, cx| match t.viewer.as_ref() {
-                        Some(v) if v.closing && v.serial == serial => {
-                            if v.close_done.get() || waited > CLOSE_MS * 4 {
-                                t.viewer = None;
-                                cx.notify();
-                                true
-                            } else {
-                                false
-                            }
-                        }
-                        _ => true,
-                    })
-                    .unwrap_or(true);
-                if finished {
-                    break;
+            cx.background_executor().timer(Duration::from_millis(CLOSE_MS + 60)).await;
+            this.update(cx, |t, cx| {
+                if t.viewer.as_ref().is_some_and(|v| v.closing) {
+                    t.viewer = None;
+                    cx.notify();
                 }
-            }
+            })
+            .ok();
         })
         .detach();
     }
@@ -257,7 +229,6 @@ impl Immagine {
             v.ds = 1.;
             v.vel_y = 0.;
             v.mode = DragMode::Undecided;
-            v.snap_id += 1;
             v.snap = None;
             cx.notify();
         }
@@ -413,7 +384,6 @@ impl Immagine {
                 v.pinching = true;
                 v.start = None;
                 v.mode = DragMode::None;
-                v.snap_id += 1;
                 v.snap = None;
                 v.dx = 0.;
                 v.dy = 0.;
@@ -547,10 +517,9 @@ impl Immagine {
             window.request_animation_frame();
         }
         let snapping = snap.is_some();
-        let close_done = v.close_done.clone();
         // Closing shrinks into the tile of the photo that is shown now (not the one the viewer was opened on); when
         // that tile is not on screen the photo just fades out.
-        let tile = if closing { self.fresh_tile(index).filter(|b| f32::from(b.origin.y) < vh && f32::from(b.origin.y + b.size.height) > 0.) } else { v.from };
+        let tile = if closing { self.tile_bounds.borrow().get(&index).copied().filter(|b| f32::from(b.origin.y) < vh && f32::from(b.origin.y + b.size.height) > 0.) } else { v.from };
         let from = tile.map(|b| {
             let (x, y): (f32, f32) = (b.origin.x.into(), b.origin.y.into());
             let (w, h): (f32, f32) = (b.size.width.into(), b.size.height.into());
@@ -664,9 +633,6 @@ impl Immagine {
                         .left_0()
                         .size_full()
                         .with_animation(("viewer-anim", v.serial), anim(if closing { CLOSE_MS } else { OPEN_MS }), move |el, d| {
-                            if closing && d >= 1. {
-                                close_done.set(true);
-                            }
                             let t = if closing { 1. - d } else { d };
                             // While dragging down the backdrop fades and the photo follows the finger.
                             let fade = match release {

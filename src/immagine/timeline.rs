@@ -25,13 +25,11 @@ impl Immagine {
         let rows = items.len().div_ceil(columns);
         let footer = self.bottom.max(10.) + 84.;
 
-        let handle = self.grid_scroll.borrow_mut().entry(id).or_default().clone();
         let origin = self.origin.clone();
         let placeholder = p.chip;
         let view = cx.weak_entity();
         let store = self.thumbs.clone();
         let bounds_map = self.tile_bounds.clone();
-        let pass = self.render_pass.clone();
         let grid_bounds = self.grid_bounds.clone();
         let list = uniform_list(id, rows + 1, move |range, window, cx| {
             store.borrow_mut().begin_frame();
@@ -44,7 +42,6 @@ impl Immagine {
                         let view = view.clone();
                         let store = store.clone();
                         let bounds_map = bounds_map.clone();
-                        let pass = pass.clone();
                         let all = items.clone();
                         let key = format!("t:{}", item.id);
                         let loaded = thumbs::get(&store, &key, || format!("{origin}/api/assets/{}/thumbnail?size=thumbnail", item.id), cx);
@@ -64,9 +61,11 @@ impl Immagine {
                             .child(
                                 canvas(
                                     move |bounds, _, _| {
-                                        let now = pass.get();
                                         let mut map = bounds_map.borrow_mut();
-                                        map.insert(idx, (bounds, now));
+                                        if map.len() > 600 {
+                                            map.clear();
+                                        }
+                                        map.insert(idx, bounds);
                                     },
                                     |_, _, _, _| {},
                                 )
@@ -87,7 +86,6 @@ impl Immagine {
                 })
                 .collect()
         })
-        .track_scroll(&handle)
         .size_full();
         // The list's on-screen box, so the closing viewer can clip its shrinking photo to it.
         div().flex_1().relative().child(list).child(canvas(move |bounds, _, _| grid_bounds.set(bounds), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
