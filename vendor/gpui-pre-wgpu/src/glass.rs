@@ -261,7 +261,7 @@ impl GlassResources {
                 g.corner_radius,
                 g.blur,
             ],
-            shape: [g.bezel, g.refraction, g.dispersion, g.light],
+            shape: [g.bezel, g.refraction, g.fade, g.light],
             tint: g.tint,
         };
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {

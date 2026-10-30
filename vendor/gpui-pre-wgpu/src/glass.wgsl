@@ -4,7 +4,7 @@
 struct Params {
     rect: vec4<f32>,   // x, y, w, h in device px
     misc: vec4<f32>,   // viewport w, viewport h, corner radius, blur radius
-    shape: vec4<f32>,  // bezel width, max refraction, dispersion, light strength
+    shape: vec4<f32>,  // bezel width, max refraction, bottom fade height, light strength
     tint: vec4<f32>,
 };
 
@@ -72,7 +72,13 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let c = P.rect.xy + P.rect.zw * 0.5;
     let p = in.px - c;
     let d = shape_sd(p);
-    let coverage = 1.0 - smoothstep(-0.75, 0.75, d);
+    var coverage = 1.0 - smoothstep(-0.75, 0.75, d);
+    // Soft bottom edge: the effect fades out over the last `fade` px.
+    if (P.shape.z > 0.0) {
+        let from_bottom = P.rect.y + P.rect.w - in.px.y;
+        let k = clamp(from_bottom / P.shape.z, 0.0, 1.0);
+        coverage = coverage * k * k * (3.0 - 2.0 * k);
+    }
     if (coverage <= 0.0) {
         discard;
     }

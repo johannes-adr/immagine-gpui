@@ -7,13 +7,13 @@ pub(crate) fn glass_div(tint: Hsla, radius: f32) -> Div {
 }
 
 /// Only the backdrop blur and a tint, without refraction or rim light: for large bars that should not show an edge.
-pub(crate) fn glass_blur(tint: Hsla, k: f32) -> Div {
+pub(crate) fn glass_blur(tint: Hsla, k: f32, fade: f32) -> Div {
     let style = GlassStyle {
         corner_radius: px(0.),
-        blur: px(14. * k),
+        blur: px(9. * k),
         bezel: px(12.),
         refraction: px(0.),
-        dispersion: 0.,
+        fade: px(fade),
         light: 0.,
         tint: Hsla { a: tint.a * k, ..tint },
     };
@@ -27,7 +27,7 @@ pub(crate) fn glass_div_faded(tint: Hsla, radius: f32, k: f32) -> Div {
         blur: px(12. * k),
         bezel: px((radius * 0.7).clamp(10., 22.)),
         refraction: px((radius * 0.5).clamp(6., 14.) * k),
-        dispersion: 0.06 * k,
+        fade: px(0.),
         light: k,
         tint: Hsla { a: tint.a * k, ..tint },
     };

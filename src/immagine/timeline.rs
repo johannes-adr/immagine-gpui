@@ -28,7 +28,7 @@ impl Immagine {
         let cell = ((vw - GAP * (columns as f32 - 1.)) / columns as f32).floor();
         let rows = items.len().div_ceil(columns);
         let items_empty = items.is_empty();
-        let footer = self.bottom.max(10.) + 94.;
+        let footer = self.bottom.max(10.) + 119.;
 
         let origin = self.origin.clone();
         let placeholder = p.chip;
@@ -36,6 +36,9 @@ impl Immagine {
         let store = self.thumbs.clone();
         let bounds_map = self.tile_bounds.clone();
         let grid_bounds = self.grid_bounds.clone();
+        // With a header over the list, rows are also built one row above and below the screen so none pops in
+        // at the edges while scrolling (the root clips what sticks out).
+        let over = if lead > 0. { cell + GAP } else { 0. };
         let list = uniform_list(id, rows, move |range, window, cx| {
             store.borrow_mut().begin_frame();
             for evicted in store.borrow_mut().take_evicted() {
@@ -89,8 +92,8 @@ impl Immagine {
                 .collect()
         })
         .size_full()
-        .pt(px(lead))
-        .pb(px(footer));
+        .pt(px(lead + over))
+        .pb(px(footer + over));
         let list = match scroll {
             Some((handle, placed)) => {
                 if !items_empty && !placed.replace(true) {
@@ -101,6 +104,7 @@ impl Immagine {
             None => list,
         };
         // The list's on-screen box, so the closing viewer can clip its shrinking photo to it.
+        let list = if over > 0. { div().absolute().top(px(-over)).bottom(px(-over)).left_0().w_full().child(list) } else { div().size_full().child(list) };
         div().flex_1().relative().child(list).child(canvas(move |bounds, _, _| grid_bounds.set(bounds), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
     }
 
@@ -123,12 +127,8 @@ impl Immagine {
                     .left_0()
                     .w_full()
                     .h(px(head))
-                    // Glass strips of growing strength, shorter each time: the blur builds up toward the top edge
-                    // instead of ending in one hard line (glass cannot fade, and a later strip replaces the
-                    // earlier one where they overlap).
-                    .children([(0.2, 0.), (0.45, 9.), (0.7, 18.), (1., 28.)].map(|(k, cut)| {
-                        glass_blur(p.bar_tint, k).absolute().top_0().left_0().w_full().h(px(head - cut))
-                    }))
+                    // One blur strip whose lower part fades out in the shader: a real gradient, no edge.
+                    .child(glass_blur(p.bar_tint, 0.8, 44.).absolute().top_0().left_0().w_full().h(px(head)))
                     .child(
                         div()
                             .absolute()

@@ -783,7 +783,8 @@ pub struct GlassParams {
     pub blur: f32,
     pub bezel: f32,
     pub refraction: f32,
-    pub dispersion: f32,
+    /// Height in device px over which the glass fades out along its bottom edge, 0 for a hard edge.
+    pub fade: f32,
     pub light: f32,
     pub tint: [f32; 4],
 }

@@ -5193,7 +5193,7 @@ impl Window {
                 blur: f32::from(style.blur) * scale,
                 bezel: f32::from(style.bezel) * scale,
                 refraction: f32::from(style.refraction) * scale,
-                dispersion: style.dispersion,
+                fade: f32::from(style.fade) * scale,
                 light: style.light,
                 tint: [tint.r, tint.g, tint.b, tint.a],
             },
@@ -10045,8 +10045,8 @@ pub struct GlassStyle {
     pub bezel: Pixels,
     /// Maximum backdrop displacement at the very edge.
     pub refraction: Pixels,
-    /// Chromatic dispersion at the edge, 0 for none.
-    pub dispersion: f32,
+    /// Height over which the glass fades out along its bottom edge, 0 for a hard edge.
+    pub fade: Pixels,
     /// Strength of the specular rim light, 0 for none.
     pub light: f32,
     /// Color mixed over the blurred backdrop; alpha sets how much.
@@ -10060,7 +10060,7 @@ impl Default for GlassStyle {
             blur: Pixels(10.),
             bezel: Pixels(16.),
             refraction: Pixels(14.),
-            dispersion: 0.25,
+            fade: Pixels(0.),
             light: 1.0,
             tint: Hsla { h: 0., s: 0., l: 1., a: 0.08 },
         }
