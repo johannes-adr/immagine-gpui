@@ -129,6 +129,10 @@ impl Immagine {
                     view.update(cx, |t, cx| {
                         let open = t.viewer.as_ref().is_some_and(|v| !v.closing);
                         t.sync_range_bar(open, cx);
+                        // The header's date span follows the scroll position.
+                        if t.range_bar && t.visible.get() != t.header_span.get() {
+                            cx.notify();
+                        }
                     })
                     .ok();
                 });

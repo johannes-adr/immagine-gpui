@@ -229,14 +229,7 @@ impl Immagine {
             trash: None,
             editor: None,
         });
-        if self.pinch.is_none() {
-            let weak = cx.weak_entity();
-            let async_cx = cx.to_async();
-            self.pinch = H::install_gestures(move |event| {
-                let mut app = async_cx.clone();
-                weak.update(&mut app, |this, cx| this.pinch(event, cx)).ok();
-            });
-        }
+        self.ensure_gestures(cx);
         cx.notify();
     }
 
@@ -428,7 +421,22 @@ impl Immagine {
         cx.notify();
     }
 
+    /// Installs the raw touch listener once; the viewer and the timeline grid both read it.
+    pub(super) fn ensure_gestures(&mut self, cx: &mut Context<Self>) {
+        if self.pinch.is_none() {
+            let weak = cx.weak_entity();
+            let async_cx = cx.to_async();
+            self.pinch = H::install_gestures(move |event| {
+                let mut app = async_cx.clone();
+                weak.update(&mut app, |this, cx| this.pinch(event, cx)).ok();
+            });
+        }
+    }
+
     fn pinch(&mut self, event: Pinch, cx: &mut Context<Self>) {
+        if self.viewer.is_none() {
+            return self.grid_pinch(event, cx);
+        }
         let width = self.viewer.as_ref().map(|v| v.viewport.get().0).unwrap_or(0.);
         match event {
             Pinch::Down { x, y } => return self.drag_start(point(px(x), px(y)), cx),

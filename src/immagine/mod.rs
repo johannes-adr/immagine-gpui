@@ -92,6 +92,12 @@ pub(crate) struct Immagine {
     /// The timeline shows the newest photos at the bottom and starts scrolled there.
     timeline_scroll: UniformListScrollHandle,
     timeline_placed: std::cell::Cell<bool>,
+    /// Columns of the timeline grid (a step of `ZOOM_LEVELS`), the pinch scale gathered since the last step, the
+    /// photos (first, last index) the grid built last, and the span the header shows.
+    grid_cols: usize,
+    grid_scale: f32,
+    visible: Rc<std::cell::Cell<(usize, usize)>>,
+    header_span: std::cell::Cell<(usize, usize)>,
     /// Rubber band shared by every scroll view (timeline, albums, people, their pages).
     rubber: RubberBand,
     albums_scroll: ScrollHandle,
@@ -196,6 +202,10 @@ impl Immagine {
             swap_gen: 0,
             timeline_scroll: UniformListScrollHandle::new(),
             timeline_placed: std::cell::Cell::new(false),
+            grid_cols: 3,
+            grid_scale: 1.,
+            visible: Rc::new(std::cell::Cell::new((0, 0))),
+            header_span: std::cell::Cell::new((0, 0)),
             rubber: Default::default(),
             albums_scroll: ScrollHandle::new(),
             tile_bounds: Rc::new(RefCell::new(HashMap::new())),
@@ -208,6 +218,7 @@ impl Immagine {
             people: Default::default(),
         };
         this.resume(cx);
+        this.ensure_gestures(cx);
         this
     }
 

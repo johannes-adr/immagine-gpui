@@ -40,7 +40,7 @@ pub struct Groups {
 }
 
 /// `YYYY-MM-DD` to (year, month, day).
-fn parse_bucket(s: &str) -> Option<(i32, u32, u32)> {
+pub fn parse_bucket(s: &str) -> Option<(i32, u32, u32)> {
     let mut parts = s.split('-');
     let y = parts.next()?.parse().ok()?;
     let m = parts.next()?.parse().ok()?;
@@ -82,6 +82,31 @@ pub fn group(items: &[TimelineItem]) -> Groups {
         }
     }
     groups
+}
+
+const MONTH_ABBR: [&str; 12] = ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni", "Juli", "Aug.", "Sept.", "Okt.", "Nov.", "Dez."];
+
+/// "Okt 2026" style label for the month of a `YYYY-MM-DD` bucket.
+pub fn month_label(bucket: &str) -> Option<String> {
+    let (y, m, _) = parse_bucket(bucket)?;
+    Some(format!("{} {y}", MONTH_ABBR[m as usize - 1].trim_end_matches('.')))
+}
+
+/// The date span between two buckets in German: "3.–8. Okt. 2026", "28. Sept. – 4. Okt. 2026",
+/// "28. Dez. 2025 – 4. Jan. 2026", or a single day.
+pub fn format_range(from: &str, to: &str) -> Option<String> {
+    let (y1, m1, d1) = parse_bucket(from)?;
+    let (y2, m2, d2) = parse_bucket(to)?;
+    let name = |m: u32| MONTH_ABBR[m as usize - 1];
+    Some(if (y1, m1, d1) == (y2, m2, d2) {
+        format!("{d1}. {} {y1}", name(m1))
+    } else if (y1, m1) == (y2, m2) {
+        format!("{d1}.–{d2}. {} {y1}", name(m1))
+    } else if y1 == y2 {
+        format!("{d1}. {} – {d2}. {} {y1}", name(m1), name(m2))
+    } else {
+        format!("{d1}. {} {y1} – {d2}. {} {y2}", name(m1), name(m2))
+    })
 }
 
 impl Month {
@@ -135,6 +160,15 @@ mod tests {
         // Busiest day of 2026 is 18 Sept, first photo at index 1.
         assert_eq!(g.years[1].cover, 1);
         assert_eq!(g.months[1].days, vec![Day { day: 18, first: 1, count: 2 }, Day { day: 20, first: 3, count: 1 }]);
+    }
+
+    #[test]
+    fn range_formats() {
+        assert_eq!(format_range("2026-10-03", "2026-10-08").unwrap(), "3.–8. Okt. 2026");
+        assert_eq!(format_range("2026-09-28", "2026-10-04").unwrap(), "28. Sept. – 4. Okt. 2026");
+        assert_eq!(format_range("2025-12-28", "2026-01-04").unwrap(), "28. Dez. 2025 – 4. Jan. 2026");
+        assert_eq!(format_range("2026-10-03", "2026-10-03").unwrap(), "3. Okt. 2026");
+        assert_eq!(month_label("2026-10-03").unwrap(), "Okt 2026");
     }
 
     #[test]
