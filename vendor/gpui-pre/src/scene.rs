@@ -790,6 +790,9 @@ pub struct GlassParams {
     pub tint: [f32; 4],
     /// Look of the glass: 0 = original, 1 = closer to Apple's Liquid Glass. See `set_glass_variant`.
     pub variant: f32,
+    /// Re-snapshot the backdrop before drawing this glass, so it sees everything painted so far (not just what was
+    /// painted before the first glass of the frame). For glass in an opaque overlay above other glass.
+    pub fresh_backdrop: bool,
 }
 
 impl From<PaintSurface> for Primitive {

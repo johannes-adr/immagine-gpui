@@ -105,6 +105,10 @@ impl Host for Desktop {
         .await
     }
 
+    async fn share_file(_name: &str, _mime: &str, _bytes: Vec<u8>) -> Result<(), String> {
+        Err("Teilen wird auf dem Desktop nicht unterstützt".into())
+    }
+
     fn show_video(_url: &str, _top: f32, _bottom: f32) -> Option<Self::Video> {
         None
     }

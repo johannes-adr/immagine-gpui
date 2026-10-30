@@ -14,6 +14,7 @@ pub mod media_duration;
 pub mod models;
 pub mod ports;
 pub mod rendition_cache;
+pub mod rubber_band;
 pub mod store;
 pub mod sync;
 pub mod thumbhash;

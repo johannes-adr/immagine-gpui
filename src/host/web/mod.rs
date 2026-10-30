@@ -85,6 +85,20 @@ impl Host for Web {
         image_loader::decode_url(url).await
     }
 
+    async fn share_file(name: &str, mime: &str, bytes: Vec<u8>) -> Result<(), String> {
+        let share = js_sys::Function::new_with_args(
+            "name,mime,bytes",
+            "if(!navigator.share)return Promise.reject('Teilen wird hier nicht unterstützt');\
+             const f=new File([bytes],name,{type:mime});\
+             return navigator.share({files:[f]});",
+        );
+        let array = js_sys::Uint8Array::from(bytes.as_slice());
+        let promise = share
+            .call3(&wasm_bindgen::JsValue::NULL, &name.into(), &mime.into(), &array)
+            .map_err(|e| format!("{e:?}"))?;
+        wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(promise)).await.map(|_| ()).map_err(|e| format!("{e:?}"))
+    }
+
     fn show_video(url: &str, top: f32, bottom: f32) -> Option<Self::Video> {
         video::show(url, top, bottom)
     }

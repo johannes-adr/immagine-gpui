@@ -79,6 +79,16 @@ impl Thumbs {
         std::mem::take(&mut self.evicted)
     }
 
+    /// Drops every decoded rendition of asset `id` (after an edit), so the next frame loads them again.
+    pub(super) fn forget(&mut self, id: &str) {
+        for prefix in ["t", "p", "f"] {
+            if let Some(e) = self.images.remove(&format!("{prefix}:{id}")) {
+                self.bytes -= e.bytes;
+                self.evicted.push(e.image);
+            }
+        }
+    }
+
     fn insert(&mut self, key: String, image: Arc<RenderImage>, bytes: usize) {
         self.bytes += bytes;
         let stamp = self.frame;

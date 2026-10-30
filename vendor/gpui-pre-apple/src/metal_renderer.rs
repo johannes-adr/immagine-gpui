@@ -868,7 +868,7 @@ impl MetalRenderer {
                                 command_encoder,
                             );
                         } else if has_glass {
-                            if !backdrop_copied {
+                            if !backdrop_copied || surfaces[start..end].iter().any(|s| s.glass.fresh_backdrop) {
                                 // The backdrop is copied once per frame, at the first glass batch.
                                 command_encoder.end_encoding();
                                 self.copy_glass_backdrop(command_buffer, target);

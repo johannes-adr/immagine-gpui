@@ -3,39 +3,11 @@
 use super::{thumbs, Immagine};
 use crate::components::glass::glass_blur;
 use crate::theme::Palette;
-use crate::util::now_ms;
 use crate::logic::models::timeline::TimelineItem;
 use gpui_kit::*;
 use std::rc::Rc;
 
 const GAP: f32 = 2.;
-/// How far the timeline can be pulled past its ends, how long it takes to spring back, and how long the small
-/// bounce takes to its peak when a fling runs into an end.
-const MAX_OVERSCROLL: f32 = 150.;
-const BOUNCE_MS: f64 = 380.;
-const KICK_MS: f64 = 150.;
-
-#[derive(Clone, Copy, Default, PartialEq)]
-enum Mode {
-    #[default]
-    Rest,
-    /// The finger drags the band.
-    Drag,
-    /// Easing back to rest from `from`, started at `at`.
-    Back { at: f64, from: f32 },
-    /// A fling ran into the end: a small bounce of height `amp`, then back.
-    Kick { at: f64, amp: f32 },
-}
-
-/// Rubber band state: the offset past the end (positive pulls the content down) and what drives it. Only a finger
-/// moves the band; the coasting that follows a fling is cancelled at an end and never adds to it.
-#[derive(Clone, Copy, Default)]
-pub(super) struct Over {
-    value: f32,
-    down: bool,
-    mode: Mode,
-}
-
 impl Immagine {
     /// A virtualized, scrollable photo grid with a spacer for the tab bar at its end. Tapping a tile opens the
     /// viewer on `items`. Reused by the timeline, album pages and person pages; `id` must be unique per screen.
@@ -45,7 +17,7 @@ impl Immagine {
         id: &'static str,
         items: Rc<Vec<TimelineItem>>,
         lead: f32,
-        scroll: Option<(&UniformListScrollHandle, &std::cell::Cell<bool>)>,
+        scroll: (&UniformListScrollHandle, Option<&std::cell::Cell<bool>>),
         p: &Palette,
         window: &Window,
         cx: &mut Context<Self>,
@@ -62,6 +34,7 @@ impl Immagine {
         let view = cx.weak_entity();
         let store = self.thumbs.clone();
         let bounds_map = self.tile_bounds.clone();
+        let list_scroll = scroll.0.0.borrow().base_handle.clone();
         let grid_bounds = self.grid_bounds.clone();
         // A uniform list measures one row height for all items and does not account for its own padding when it
         // picks the visible rows (rows went missing at the edges). So the space above the first row (under the
@@ -88,6 +61,7 @@ impl Immagine {
                         let view = view.clone();
                         let store = store.clone();
                         let bounds_map = bounds_map.clone();
+                        let scroll = list_scroll.clone();
                         let all = items.clone();
                         let key = format!("t:{}", item.id);
                         let loaded = thumbs::get(&store, &key, || format!("{origin}/api/assets/{}/thumbnail?size=thumbnail", item.id), cx);
@@ -111,7 +85,8 @@ impl Immagine {
                                         if map.len() > 600 {
                                             map.clear();
                                         }
-                                        map.insert(idx, bounds);
+                                        let offset = scroll.offset().y;
+                                        map.insert(idx, super::TileRect { bounds, offset, scroll });
                                     },
                                     |_, _, _, _| {},
                                 )
@@ -130,133 +105,29 @@ impl Immagine {
                 .collect()
         })
         .size_full();
-        let list = match scroll {
-            Some((handle, placed)) => {
-                if !items_empty && !placed.replace(true) {
-                    handle.scroll_to_item(top_rows + rows + bottom_rows - 1, ScrollStrategy::Bottom);
-                }
-                list.track_scroll(handle)
+        let (handle, placed) = scroll;
+        if let Some(placed) = placed {
+            if !items_empty && !placed.replace(true) {
+                handle.scroll_to_item(top_rows + rows + bottom_rows - 1, ScrollStrategy::Bottom);
             }
-            None => list,
-        };
+        }
+        let list = list.track_scroll(handle);
         // The list's on-screen box, so the closing viewer can clip its shrinking photo to it.
         // (An absolute box with only top and bottom set does not give its percentage-sized child a height, so the
         // timeline, which fills the screen, gets an explicit one.)
         let vh: f32 = window.viewport_size().height.into();
         let list = if lead > 0. {
-            div().absolute().top(px(shift_top + self.overscroll.get().value)).left_0().w_full().h(px(vh - shift_top - shift_bottom)).child(list)
+            div().absolute().top(px(shift_top + self.rubber.value())).left_0().w_full().h(px(vh - shift_top - shift_bottom)).child(list)
         } else {
             div().size_full().child(list)
         };
         div().flex_1().relative().child(list).child(canvas(move |bounds, _, _| grid_bounds.set(bounds), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
     }
 
-    /// Called for every touch scroll event before the list sees it (capture phase). Returns true when the event was
-    /// used up by the rubber band.
-    pub(super) fn overscroll_event(&mut self, dy: f32, phase: TouchPhase, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let mut o = self.overscroll.get();
-        if phase == TouchPhase::Started {
-            o.down = true;
-        }
-        // Momentum is synthesized after the finger lifted, so it arrives while `down` is already false.
-        let finger = o.down;
-        if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
-            o.down = false;
-        }
-        self.overscroll.set(o);
-        if self.tab != 0 || self.screen != super::Screen::Timeline || self.viewer.as_ref().is_some_and(|v| !v.closing) {
-            return false;
-        }
-        let handle = self.timeline_scroll.0.borrow().base_handle.clone();
-        let (offset, max): (f32, f32) = (handle.offset().y.into(), handle.max_offset().y.into());
-        let outward = (offset >= -0.5 && dy > 0.) || (offset <= -max + 0.5 && dy < 0.);
-        let now = now_ms();
-        let used = if finger {
-            let mut used = false;
-            if o.value != 0. || (outward && dy != 0.) {
-                // Pushing on gets harder the farther out it is; coming back is one to one.
-                let moving_out = o.value == 0. || (o.value > 0.) == (dy > 0.);
-                let step = if moving_out { dy * 0.5 / (1. + o.value.abs() / 90.) } else { dy };
-                let next = o.value + step;
-                o.value = if o.value != 0. && (next > 0.) != (o.value > 0.) { 0. } else { next.clamp(-MAX_OVERSCROLL, MAX_OVERSCROLL) };
-                o.mode = Mode::Drag; // also takes over a band that was springing back
-                used = true;
-            }
-            if !o.down && o.value != 0. {
-                // The finger lifted with the band out: spring back. The fling it started is judged event by event
-                // below: pushing on is cancelled, coming back toward the content just scrolls it.
-                o.mode = Mode::Back { at: now, from: o.value };
-                used = true;
-            }
-            used
-        } else if o.value != 0. || o.mode != Mode::Rest {
-            // Coasting while the band is out or springing: pushing farther out is cancelled, coasting back toward
-            // the content goes through to the list.
-            let out = match o.mode {
-                Mode::Back { from, .. } => from,
-                Mode::Kick { amp, .. } => amp,
-                _ => o.value,
-            };
-            if dy != 0. && (dy > 0.) == (out > 0.) {
-                window.cancel_touch_momentum();
-                true
-            } else {
-                false
-            }
-        } else if dy != 0. && (offset + dy > 0.5 || offset + dy < -max - 0.5) {
-            // A fling reaches (or is at) an end with this step: one small bounce, scaled by its speed. The list still
-            // takes the step, which it clamps at the end.
-            window.cancel_touch_momentum();
-            o.mode = Mode::Kick { at: now, amp: (dy * 6.).abs().clamp(20., 90.) * dy.signum() };
-            cx.notify();
-            false
-        } else {
-            false
-        };
-        self.overscroll.set(o);
-        if used {
-            cx.notify();
-        }
-        used
-    }
-
-    /// Advances the spring-back and bounce from the clock; asks for frames until the band is at rest.
-    pub(super) fn overscroll_tick(&self, window: &mut Window) {
-        let mut o = self.overscroll.get();
-        let now = now_ms();
-        match o.mode {
-            Mode::Rest => return,
-            Mode::Drag if o.down => return,
-            Mode::Drag => o.mode = Mode::Back { at: now, from: o.value },
-            Mode::Kick { at, amp } if now - at >= KICK_MS => o.mode = Mode::Back { at: at + KICK_MS, from: amp },
-            _ => {}
-        }
-        // Done is decided by the clock, not by the value: a bounce starts at 0.
-        let done;
-        (o.value, done) = match o.mode {
-            Mode::Kick { at, amp } => {
-                let t = (((now - at) / KICK_MS) as f32).clamp(0., 1.);
-                (amp * (1. - (1. - t).powi(2)), false)
-            }
-            Mode::Back { at, from } => {
-                let t = ((now - at) / BOUNCE_MS).clamp(0., 1.) as f32;
-                (from * (1. - t).powi(3), t >= 1.)
-            }
-            _ => (o.value, o.value == 0.),
-        };
-        if done {
-            o.value = 0.;
-            o.mode = Mode::Rest;
-        } else {
-            window.request_animation_frame();
-        }
-        self.overscroll.set(o);
-    }
-
     pub(super) fn timeline_view(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The header is a glass strip laid over the grid, which scrolls underneath it (blurred).
         let head = self.top.max(12.) + 78.;
-        let list = self.photo_grid("timeline", self.items.clone(), head, Some((&self.timeline_scroll, &self.timeline_placed)), p, window, cx);
+        let list = self.photo_grid("timeline", self.items.clone(), head, (&self.timeline_scroll, Some(&self.timeline_placed)), p, window, cx);
 
         let count = self.items.len();
         let subtitle = if self.status.is_empty() { format!("{count} Fotos") } else { self.status.clone() };
@@ -264,7 +135,6 @@ impl Immagine {
         div()
             .size_full()
             .relative()
-            .child(overscroll_input(cx.weak_entity()))
             .child(div().absolute().top_0().left_0().size_full().flex().flex_col().child(list))
             .child(
                 div()
@@ -312,25 +182,4 @@ impl Immagine {
                     ),
             )
     }
-}
-
-/// Feeds scroll events to the rubber band before the list gets them (window listener, capture phase).
-fn overscroll_input(view: WeakEntity<Immagine>) -> Canvas<()> {
-    canvas(
-        |_, _, _| {},
-        move |_, _, window, _| {
-            let view = view.clone();
-            window.on_mouse_event(move |e: &ScrollWheelEvent, phase, window, cx| {
-                if phase != DispatchPhase::Capture || e.source != ScrollSource::Touch {
-                    return;
-                }
-                let dy: f32 = e.delta.pixel_delta(px(16.)).y.into();
-                if view.update(cx, |t, cx| t.overscroll_event(dy, e.touch_phase, window, cx)).unwrap_or(false) {
-                    cx.stop_propagation();
-                }
-            });
-        },
-    )
-    .absolute()
-    .size_0()
 }

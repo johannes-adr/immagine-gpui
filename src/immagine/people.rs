@@ -41,6 +41,7 @@ pub(super) struct PersonPage {
     pub(super) person: Person,
     pub(super) items: Rc<Vec<TimelineItem>>,
     pub(super) status: Load,
+    pub(super) scroll: UniformListScrollHandle,
 }
 
 /// UI state of the People tab.
@@ -51,6 +52,7 @@ pub(super) struct PeopleState {
     pub(super) status: Load,
     /// The open person page, `None` on the overview.
     pub(super) open: Option<PersonPage>,
+    pub(super) scroll: UniformListScrollHandle,
 }
 
 /// Every person the server knows, paging until the end.
@@ -132,7 +134,7 @@ impl Immagine {
 
     fn open_person(&mut self, person: Person, cx: &mut Context<Self>) {
         let id = person.id.clone();
-        self.people.open = Some(PersonPage { person, items: Rc::new(Vec::new()), status: Load::Loading });
+        self.people.open = Some(PersonPage { person, items: Rc::new(Vec::new()), status: Load::Loading, scroll: UniformListScrollHandle::new() });
         self.load_person_photos(id, cx);
         cx.notify();
     }
@@ -285,6 +287,7 @@ impl Immagine {
                     })
                     .collect()
             })
+            .track_scroll(&self.people.scroll)
             .flex_1()
             .into_any_element()
         };
@@ -297,22 +300,25 @@ impl Immagine {
             }));
         }
 
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .pt(px(self.top.max(12.)))
-            .child(
+        self.rubber
+            .shift(
                 div()
-                    .px_4()
-                    .pt(px(40.))
-                    .pb_2()
+                    .size_full()
                     .flex()
                     .flex_col()
-                    .child(div().text_size(px(34.)).font_weight(FontWeight::BOLD).child("Personen"))
-                    .child(status),
+                    .pt(px(self.top.max(12.)))
+                    .child(
+                        div()
+                            .px_4()
+                            .pt(px(40.))
+                            .pb_2()
+                            .flex()
+                            .flex_col()
+                            .child(div().text_size(px(34.)).font_weight(FontWeight::BOLD).child("Personen"))
+                            .child(status),
+                    )
+                    .child(body),
             )
-            .child(body)
             .into_any_element()
     }
 
@@ -342,15 +348,8 @@ impl Immagine {
             .child(div().pt_3().text_size(px(34.)).font_weight(FontWeight::BOLD).child(name))
             .child(div().text_size(px(15.)).text_color(color).child(subtitle));
 
-        let grid = self.photo_grid("person", page.items.clone(), 0., None, p, window, cx);
+        let grid = self.photo_grid("person", page.items.clone(), 0., (&page.scroll, None), p, window, cx);
 
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .pt(px(self.top.max(12.)))
-            .child(header)
-            .child(grid)
-            .into_any_element()
+        self.rubber.shift(div().size_full().flex().flex_col().pt(px(self.top.max(12.))).child(header).child(grid)).into_any_element()
     }
 }

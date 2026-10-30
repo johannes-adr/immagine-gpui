@@ -16,12 +16,19 @@ pub(crate) fn glass_blur(tint: Hsla, k: f32, fade: f32) -> Div {
         fade: px(fade),
         light: 0.,
         tint: Hsla { a: tint.a * k, ..tint },
+        fresh_backdrop: false,
     };
     div().relative().child(canvas(|_, _, _| (), move |bounds, _, window, _| window.paint_glass(bounds, style)).absolute().top_0().left_0().size_full())
 }
 
 /// Glass has no opacity, so `k` (1 = full, 0 = gone) scales every effect of the pass down to an invisible one.
 pub(crate) fn glass_div_faded(tint: Hsla, radius: f32, k: f32) -> Div {
+    glass_div_with(tint, radius, k, false)
+}
+
+/// `glass_div_faded` for glass inside an opaque overlay: `fresh_backdrop` makes it sample the frame painted so far
+/// (the overlay's own background) rather than the snapshot taken at the first glass of the frame (the page below).
+pub(crate) fn glass_div_with(tint: Hsla, radius: f32, k: f32, fresh_backdrop: bool) -> Div {
     let style = GlassStyle {
         corner_radius: px(radius),
         blur: px(12. * k),
@@ -30,6 +37,7 @@ pub(crate) fn glass_div_faded(tint: Hsla, radius: f32, k: f32) -> Div {
         fade: px(0.),
         light: k,
         tint: Hsla { a: tint.a * k, ..tint },
+        fresh_backdrop,
     };
     div().relative().rounded(px(radius)).child(
         canvas(|_, _, _| (), move |bounds, _, window, _| window.paint_glass(bounds, style))

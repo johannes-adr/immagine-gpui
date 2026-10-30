@@ -1634,7 +1634,8 @@ impl WgpuRendererCore {
                         // Snapshot the backdrop once per frame: a full-screen copy per glass batch
                         // is costly on mobile GPUs. Later glass sees what was painted before the
                         // first glass batch, which is what a lens over the content should show.
-                        if !backdrop_copied {
+                        let refresh = scene.surfaces[range.clone()].iter().any(|s| s.glass.fresh_backdrop);
+                        if !backdrop_copied || refresh {
                             backdrop_copied = true;
                             drop(pass);
                             if let Some(glass) = self.resources().glass.as_ref() {

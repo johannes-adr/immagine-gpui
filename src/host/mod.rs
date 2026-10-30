@@ -76,6 +76,8 @@ pub trait Host: 'static {
 
     /// Plays `url` between `top` and `bottom` px of the window. `None` if the platform cannot.
     fn show_video(url: &str, top: f32, bottom: f32) -> Option<Self::Video>;
+    /// Hands a file to the system share sheet. `Err` when the platform has none (desktop) or the user cancels.
+    async fn share_file(name: &str, mime: &str, bytes: Vec<u8>) -> Result<(), String>;
     /// Reports pinch and raw single-touch events. `None` if the platform has no such input source.
     fn install_gestures(on_event: impl Fn(Pinch) + 'static) -> Option<Self::Gestures>;
 }

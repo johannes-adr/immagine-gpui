@@ -5198,6 +5198,7 @@ impl Window {
                 light: style.light,
                 tint: [tint.r, tint.g, tint.b, tint.a],
                 variant,
+                fresh_backdrop: style.fresh_backdrop,
             },
         });
     }
@@ -10061,6 +10062,8 @@ pub struct GlassStyle {
     pub light: f32,
     /// Color mixed over the blurred backdrop; alpha sets how much.
     pub tint: Hsla,
+    /// Sample the frame painted so far instead of the once-per-frame backdrop snapshot taken at the first glass.
+    pub fresh_backdrop: bool,
 }
 
 impl Default for GlassStyle {
@@ -10073,6 +10076,7 @@ impl Default for GlassStyle {
             fade: Pixels(0.),
             light: 1.0,
             tint: Hsla { h: 0., s: 0., l: 1., a: 0.08 },
+            fresh_backdrop: false,
         }
     }
 }

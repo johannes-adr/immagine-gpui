@@ -12,6 +12,7 @@ mod thumbs;
 mod timeline;
 mod viewer;
 
+use crate::components::rubber_band::{self, RubberBand};
 use crate::components::fps::{fps_badge, FpsMeter};
 use crate::logic::client::{ClientError, ImmichClient};
 use crate::logic::models::timeline::TimelineItem;
@@ -70,11 +71,12 @@ pub(crate) struct Immagine {
     /// The timeline shows the newest photos at the bottom and starts scrolled there.
     timeline_scroll: UniformListScrollHandle,
     timeline_placed: std::cell::Cell<bool>,
-    /// Rubber band at the ends of the timeline.
-    overscroll: std::cell::Cell<timeline::Over>,
+    /// Rubber band shared by every scroll view (timeline, albums, people, their pages).
+    rubber: RubberBand,
+    albums_scroll: ScrollHandle,
     thumb_at: f64,
     /// Screen bounds of the tiles painted last, so the viewer can zoom out of the tapped one.
-    tile_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
+    tile_bounds: Rc<RefCell<HashMap<usize, TileRect>>>,
     grid_bounds: Rc<std::cell::Cell<Bounds<Pixels>>>,
     viewer: Option<viewer::Viewer>,
     viewer_serial: u32,
@@ -156,7 +158,8 @@ impl Immagine {
             thumb_gen: 0,
             timeline_scroll: UniformListScrollHandle::new(),
             timeline_placed: std::cell::Cell::new(false),
-            overscroll: Default::default(),
+            rubber: Default::default(),
+            albums_scroll: ScrollHandle::new(),
             thumb_at: 0.,
             tile_bounds: Rc::new(RefCell::new(HashMap::new())),
             grid_bounds: Rc::new(std::cell::Cell::new(Bounds::default())),
@@ -330,10 +333,50 @@ impl Immagine {
     }
 }
 
+/// A grid tile as it was last painted: its screen bounds and the scroll offset of its list at that time.
+#[derive(Clone)]
+pub(super) struct TileRect {
+    bounds: Bounds<Pixels>,
+    offset: Pixels,
+    scroll: ScrollHandle,
+}
+
+impl TileRect {
+    /// Where the tile is now: the painted bounds moved by how far its list scrolled since, so the answer stays
+    /// right for a tile that scrolled out of the rows the list builds.
+    pub(super) fn now(&self) -> Bounds<Pixels> {
+        let mut b = self.bounds;
+        b.origin.y += self.scroll.offset().y - self.offset;
+        b
+    }
+}
+
+impl Immagine {
+    /// The scroll handle of whatever scrolls on screen now, for the rubber band; `None` while the viewer is open
+    /// or on screens without a scroll view.
+    fn active_scroll(&self) -> Option<ScrollHandle> {
+        if self.screen != Screen::Timeline || self.viewer.as_ref().is_some_and(|v| !v.closing) {
+            return None;
+        }
+        let list = |h: &UniformListScrollHandle| h.0.borrow().base_handle.clone();
+        Some(match self.tab {
+            0 => list(&self.timeline_scroll),
+            1 => match self.albums.open_scroll() {
+                Some(scroll) => list(scroll),
+                None => self.albums_scroll.clone(),
+            },
+            _ => match self.people.open.as_ref() {
+                Some(page) => list(&page.scroll),
+                None => list(&self.people.scroll),
+            },
+        })
+    }
+}
+
 impl Render for Immagine {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::new(self.dark);
-        self.overscroll_tick(window);
+        self.rubber.tick(window);
         let background = if self.dark { rgb(0x000000) } else { rgb(0xffffff) };
         let content = match self.screen {
             Screen::Loading => div().into_any_element(),
@@ -354,6 +397,10 @@ impl Render for Immagine {
             .bg(background)
             .text_color(p.label)
             .child(content)
+            .child(rubber_band::input(cx.weak_entity(), |this, dy, phase, window| {
+                let scroll = this.active_scroll();
+                this.rubber.event(dy, phase, scroll.as_ref(), window)
+            }))
             // Glass is ordered by what it overlaps, and the backdrop it samples is copied at the first glass batch.
             // A tab bar over an empty footer (list scrolled to its end) would be ordered before the photos and see
             // none of them. This almost invisible layer above the content lifts everything painted after it.

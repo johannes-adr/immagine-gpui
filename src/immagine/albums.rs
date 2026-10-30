@@ -30,6 +30,7 @@ struct OpenAlbum {
     id: String,
     name: String,
     items: Rc<Vec<TimelineItem>>,
+    scroll: UniformListScrollHandle,
 }
 
 /// UI state of the Albums tab; extend as needed.
@@ -46,6 +47,11 @@ pub(super) struct AlbumsState {
 }
 
 impl AlbumsState {
+    /// Scroll handle of the open album page's photo list.
+    pub(super) fn open_scroll(&self) -> Option<&UniformListScrollHandle> {
+        self.open.as_ref().map(|o| &o.scroll)
+    }
+
     /// Called after every sync and after the first load; copy what the view needs out of the store.
     pub(super) fn refresh(&mut self, store: &MemoryStore) {
         use crate::logic::store::Store;
@@ -130,7 +136,7 @@ impl Immagine {
             .map(|a| AlbumPath::leaf_of_album_name(&a.album_name))
             .unwrap_or_default();
         let items = Rc::new(newest_first(engine.store().album_assets(id)));
-        self.albums.open = Some(OpenAlbum { id: id.to_string(), name, items });
+        self.albums.open = Some(OpenAlbum { id: id.to_string(), name, items, scroll: UniformListScrollHandle::new() });
         cx.notify();
     }
 
@@ -173,15 +179,8 @@ impl Immagine {
             .child(back)
             .child(div().text_size(px(34.)).font_weight(FontWeight::BOLD).truncate().child(open.name.clone()))
             .child(div().text_size(px(15.)).text_color(p.secondary).child(subtitle));
-        let list = self.photo_grid("album-photos", open.items.clone(), 0., None, p, window, cx);
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .pt(px(self.top.max(12.)))
-            .child(header)
-            .child(list)
-            .into_any_element()
+        let list = self.photo_grid("album-photos", open.items.clone(), 0., (&open.scroll, None), p, window, cx);
+        self.rubber.shift(div().size_full().flex().flex_col().pt(px(self.top.max(12.))).child(header).child(list)).into_any_element()
     }
 
     /// One folder level: a breadcrumb and back chip for nested folders, then folder and album tiles.
@@ -305,20 +304,16 @@ impl Immagine {
             div().px(px(PAD)).pt(px(8.)).flex().flex_wrap().gap(px(GAP)).children(tiles).into_any_element()
         };
 
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .pt(px(self.top.max(12.)))
-            .child(header)
-            .child(
+        self.rubber
+            .shift(div().size_full().flex().flex_col().pt(px(self.top.max(12.))).child(header).child(
                 div()
                     .id("albums-scroll")
                     .flex_1()
                     .overflow_y_scroll()
+                    .track_scroll(&self.albums_scroll)
                     .child(body)
                     .child(div().h(px(self.bottom.max(10.) + 84.))),
-            )
+            ))
             .into_any_element()
     }
 }

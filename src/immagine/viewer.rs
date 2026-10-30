@@ -4,14 +4,17 @@
 //! stand-in until the larger preview arrives, and the full-size rendition once zoomed in.
 
 use super::{thumbs, Immagine};
-use crate::components::glass::glass_div_faded;
+use crate::components::glass::glass_div_with;
 use crate::logic::client::ImmichClient;
+use crate::logic::crop_geometry::{self, CropAspect, CropHandle, HANDLE_TOLERANCE};
+use crate::logic::grid::layout::{Point as CPoint, Rect as CRect, Size as CSize};
 use crate::logic::models::album_op::AlbumOp;
+use crate::logic::models::asset_edit::AssetEdit;
 use crate::logic::models::asset::Asset;
 use crate::logic::models::asset_details::InfoFormat;
 use crate::logic::models::asset_info::AssetInfoFormat;
 use crate::logic::models::timeline::TimelineItem;
-use crate::theme::{BLUE, GLASS_TINT_DARK, RED};
+use crate::theme::{BLUE, RED};
 use crate::util::{anim, lerp, now_ms};
 use crate::host::{Current as H, Host, Pinch, VideoHandle};
 use gpui_kit::*;
@@ -38,6 +41,28 @@ const DOUBLE_TAP_ZOOM: f32 = 2.5;
 const FULLSIZE_ZOOM: f32 = 1.2;
 /// Movement (px) that turns a press into a drag, so a tap with a little jitter still counts as a tap.
 const TAP_SLOP: f32 = 8.;
+/// Dark grey of the viewer's glass buttons, over the viewer's black background.
+const VIEWER_TINT: Hsla = Hsla { h: 0., s: 0., l: 0.28, a: 0.62 };
+/// Darker tint of the delete confirmation, which is bigger and carries text.
+const DIALOG_TINT: Hsla = Hsla { h: 0., s: 0., l: 0.12, a: 0.94 };
+/// Length of the morph from the trash button to the delete confirmation (and back).
+const DIALOG_MS: f64 = 340.;
+const DIALOG_SIZE: (f32, f32) = (292., 268.);
+/// Smallest side of the crop box (fraction of the image).
+const MIN_CROP: f64 = 0.08;
+
+/// The crop editor: the box in normalized image coordinates, the handle being dragged.
+struct Editor {
+    rect: CRect,
+    aspect: CropAspect,
+    /// Handle grabbed, the box when it was grabbed and the pointer position then.
+    grab: Option<(CropHandle, CRect, (f32, f32))>,
+    /// Pixel size of the image, known once the asset record arrived (needed to save).
+    pixels: Option<(f64, f64)>,
+    saving: bool,
+    /// Image rectangle (x, y, w, h) of the last render, for hit testing.
+    area: Cell<(f32, f32, f32, f32)>,
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum DragMode {
@@ -73,6 +98,9 @@ pub(super) struct Viewer {
     index: usize,
     from: Option<Bounds<Pixels>>,
     pub(super) closing: bool,
+    /// Decided when closing starts: the tile of the shown photo was on screen, so the photo shrinks into it
+    /// (following it while the grid scrolls) instead of fading out.
+    into_tile: bool,
     pub(super) serial: u32,
     /// Pointer position where the current drag started, the last one seen, and the distance moved.
     start: Option<(f32, f32)>,
@@ -101,6 +129,9 @@ pub(super) struct Viewer {
     info: bool,
     details: Option<Rc<Asset>>,
     video: Option<VideoHandle>,
+    /// Delete confirmation: when it started morphing and whether it is opening (else closing).
+    trash: Option<(f64, bool)>,
+    editor: Option<Editor>,
 }
 
 /// Photo scale while dragging down by `dy`: 1 at rest, 0.5 at half a screen height.
@@ -160,13 +191,14 @@ impl Viewer {
 impl Immagine {
     /// Opens the viewer on `items[index]`, zooming out of the grid tile with that index if it was painted.
     pub(super) fn open_viewer(&mut self, items: Rc<Vec<TimelineItem>>, index: usize, cx: &mut Context<Self>) {
-        let from = self.tile_bounds.borrow().get(&index).copied();
+        let from = self.tile_bounds.borrow().get(&index).map(|t| t.now());
         self.viewer_serial += 1;
         self.viewer = Some(Viewer {
             items,
             index,
             from,
             closing: false,
+            into_tile: false,
             serial: self.viewer_serial,
             start: None,
             last: (0., 0.),
@@ -189,6 +221,8 @@ impl Immagine {
             info: false,
             details: None,
             video: None,
+            trash: None,
+            editor: None,
         });
         if self.pinch.is_none() {
             let weak = cx.weak_entity();
@@ -207,6 +241,8 @@ impl Immagine {
             return;
         }
         v.closing = true;
+        let vh = v.viewport.get().1;
+        v.into_tile = self.tile_bounds.borrow().get(&v.index).map(|t| t.now()).is_some_and(|b| f32::from(b.origin.y) < vh && f32::from(b.origin.y + b.size.height) > 0.);
         v.close_at = now_ms();
         v.start = None;
         v.video = None;
@@ -229,7 +265,10 @@ impl Immagine {
     }
 
     fn drag_start(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
-        if let Some(v) = self.viewer.as_mut().filter(|v| !v.closing && !v.pinching) {
+        if self.viewer.as_ref().is_some_and(|v| v.editor.is_some()) {
+            return self.editor_down(xy(at), cx);
+        }
+        if let Some(v) = self.viewer.as_mut().filter(|v| !v.closing && !v.pinching && v.trash.is_none()) {
             v.start = Some(xy(at));
             v.anchor = xy(at);
             v.last = xy(at);
@@ -245,6 +284,9 @@ impl Immagine {
     }
 
     fn drag_move(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.viewer.as_ref().is_some_and(|v| v.editor.is_some()) {
+            return self.editor_move(xy(at), cx);
+        }
         let Some(v) = self.viewer.as_mut().filter(|v| !v.pinching) else { return };
         let Some((sx, sy)) = v.start else { return };
         let (x, y) = xy(at);
@@ -276,6 +318,11 @@ impl Immagine {
     }
 
     fn drag_end(&mut self, width: f32, cx: &mut Context<Self>) {
+        if let Some(ed) = self.viewer.as_mut().and_then(|v| v.editor.as_mut()) {
+            ed.grab = None;
+            cx.notify();
+            return;
+        }
         let Some(v) = self.viewer.as_mut() else { return };
         if v.start.take().is_none() {
             return;
@@ -428,6 +475,224 @@ impl Immagine {
         cx.notify();
     }
 
+    /// Filmstrip tap: shows photo `j`.
+    fn jump_to(&mut self, j: usize, cx: &mut Context<Self>) {
+        let Some(v) = self.viewer.as_mut().filter(|v| !v.closing && j < v.items.len()) else { return };
+        v.index = j;
+        v.reset_view();
+        self.refresh_details(cx);
+        cx.notify();
+    }
+
+    // MARK: - Delete
+
+    fn open_trash_dialog(&mut self, cx: &mut Context<Self>) {
+        let Some(v) = self.viewer.as_mut().filter(|v| !v.closing && v.trash.is_none() && v.editor.is_none()) else { return };
+        v.trash = Some((now_ms(), true));
+        cx.notify();
+    }
+
+    fn close_trash_dialog(&mut self, cx: &mut Context<Self>) {
+        let Some(v) = self.viewer.as_mut() else { return };
+        let Some((_, true)) = v.trash else { return };
+        v.trash = Some((now_ms(), false));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(DIALOG_MS as u64 + 40)).await;
+            this.update(cx, |t, cx| {
+                if let Some(v) = t.viewer.as_mut().filter(|v| matches!(v.trash, Some((_, false)))) {
+                    v.trash = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// "Foto löschen": moves the shown photo to the server trash (applied locally at once, sent by the outbox).
+    fn trash_current(&mut self, cx: &mut Context<Self>) {
+        let Some(v) = self.viewer.as_mut().filter(|v| !v.closing) else { return };
+        v.trash = None;
+        let Some(id) = v.items.get(v.index).map(|i| i.id.clone()) else { return };
+        let Some(engine) = self.engine.as_mut() else {
+            self.status = "Bitte kurz warten, es wird synchronisiert.".into();
+            cx.notify();
+            return;
+        };
+        engine.enqueue(&[AlbumOp::trash(vec![id.clone()])]);
+        Rc::make_mut(&mut self.items).retain(|i| i.id != id);
+        Rc::make_mut(&mut v.items).retain(|i| i.id != id);
+        if v.items.is_empty() {
+            self.sync(cx);
+            self.close_viewer(cx);
+            return;
+        }
+        v.index = v.index.min(v.items.len() - 1);
+        v.reset_view();
+        self.refresh_details(cx);
+        self.sync(cx);
+        cx.notify();
+    }
+
+    // MARK: - Share
+
+    fn share_current(&mut self, cx: &mut Context<Self>) {
+        let (origin, token) = (self.origin.clone(), self.token.clone());
+        let Some(item) = self.viewer.as_ref().filter(|v| !v.closing).and_then(|v| v.items.get(v.index)) else { return };
+        if item.is_video() {
+            self.status = "Videos lassen sich hier noch nicht teilen.".into();
+            cx.notify();
+            return;
+        }
+        let id = item.id.clone();
+        self.status = "Bereite zum Teilen vor …".into();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = async {
+                let client = ImmichClient::new(&origin, H::transport()).map_err(|e| e.to_string())?;
+                let bytes = client.original(&id, &token).await.map_err(|e| e.to_string())?;
+                let (name, mime) = if bytes.starts_with(&[0x89, b'P']) { ("foto.png", "image/png") } else { ("foto.jpg", "image/jpeg") };
+                H::share_file(name, mime, bytes).await
+            }
+            .await;
+            this.update(cx, |t, cx| {
+                t.status = match result {
+                    // Dismissing the share sheet is reported as an error too; nothing to tell the user then.
+                    Err(e) if !e.contains("AbortError") => e,
+                    _ => String::new(),
+                };
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    // MARK: - Crop editor
+
+    fn open_editor(&mut self, cx: &mut Context<Self>) {
+        let (origin, token) = (self.origin.clone(), self.token.clone());
+        let Some(v) = self.viewer.as_mut().filter(|v| !v.closing && v.trash.is_none() && v.editor.is_none()) else { return };
+        let Some(item) = v.items.get(v.index).filter(|i| i.is_image()) else { return };
+        let (id, ratio) = (item.id.clone(), item.ratio.unwrap_or(1.));
+        v.reset_view();
+        v.editor = Some(Editor { rect: CRect::new(0., 0., 1., 1.), aspect: CropAspect::Freeform, grab: None, pixels: None, saving: false, area: Cell::new((0., 0., 0., 0.)) });
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let asset = async {
+                let client = ImmichClient::new(&origin, H::transport()).ok()?;
+                client.asset(&id, &token).await.ok()
+            }
+            .await;
+            this.update(cx, |t, cx| {
+                let Some(ed) = t.viewer.as_mut().and_then(|v| v.editor.as_mut()) else { return };
+                if let Some((w, h)) = asset.and_then(|a| Some((a.width? as f64, a.height? as f64))).filter(|(w, h)| *w > 0. && *h > 0.) {
+                    // The record may hold the sensor orientation; the displayed ratio decides which way round it is.
+                    let swap = (w > h) != (ratio > 1.) && (ratio - 1.).abs() > 0.01;
+                    ed.pixels = Some(if swap { (h, w) } else { (w, h) });
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn close_editor(&mut self, cx: &mut Context<Self>) {
+        if let Some(v) = self.viewer.as_mut() {
+            v.editor = None;
+        }
+        cx.notify();
+    }
+
+    fn editor_size(v: &Viewer) -> CSize {
+        let ed = v.editor.as_ref();
+        match ed.and_then(|e| e.pixels) {
+            Some((w, h)) => CSize::new(w, h),
+            None => CSize::new(v.items.get(v.index).and_then(|i| i.ratio).unwrap_or(1.) * 1000., 1000.),
+        }
+    }
+
+    fn editor_down(&mut self, at: (f32, f32), cx: &mut Context<Self>) {
+        let Some(ed) = self.viewer.as_mut().and_then(|v| v.editor.as_mut()) else { return };
+        let (ix, iy, iw, ih) = ed.area.get();
+        let (iw, ih) = (iw as f64, ih as f64);
+        let r = ed.rect;
+        let px_rect = CRect::new(r.x * iw, r.y * ih, r.width * iw, r.height * ih);
+        let p = CPoint::new((at.0 - ix) as f64, (at.1 - iy) as f64);
+        ed.grab = crop_geometry::handle_at(p, px_rect, HANDLE_TOLERANCE).map(|h| (h, r, at));
+        cx.notify();
+    }
+
+    fn editor_move(&mut self, at: (f32, f32), cx: &mut Context<Self>) {
+        let Some(v) = self.viewer.as_mut() else { return };
+        let size = Self::editor_size(v);
+        let Some(ed) = v.editor.as_mut() else { return };
+        let Some((handle, start, from)) = ed.grab else { return };
+        let (_, _, iw, ih) = ed.area.get();
+        if iw < 1. || ih < 1. {
+            return;
+        }
+        let delta = CSize::new(((at.0 - from.0) / iw) as f64, ((at.1 - from.1) / ih) as f64);
+        let ratio = ed.aspect.pixel_ratio(size).map(|r| crop_geometry::normalized_ratio(r, size));
+        ed.rect = crop_geometry::drag(start, handle, delta, ratio, MIN_CROP);
+        cx.notify();
+    }
+
+    fn set_aspect(&mut self, aspect: CropAspect, cx: &mut Context<Self>) {
+        let Some(v) = self.viewer.as_mut() else { return };
+        let size = Self::editor_size(v);
+        let Some(ed) = v.editor.as_mut() else { return };
+        ed.aspect = aspect;
+        if let Some(r) = aspect.pixel_ratio(size) {
+            ed.rect = crop_geometry::fit(CRect::new(0., 0., 1., 1.), crop_geometry::normalized_ratio(r, size));
+        }
+        cx.notify();
+    }
+
+    /// "Fertig": sends the crop to the server, which re-renders the photo's thumbnails.
+    fn save_editor(&mut self, cx: &mut Context<Self>) {
+        let (origin, token) = (self.origin.clone(), self.token.clone());
+        let Some(v) = self.viewer.as_mut() else { return };
+        let Some(id) = v.items.get(v.index).map(|i| i.id.clone()) else { return };
+        let Some(ed) = v.editor.as_mut().filter(|e| !e.saving) else { return };
+        let Some((w, h)) = ed.pixels else { return };
+        let r = ed.rect;
+        let (x, y) = ((r.x * w).round() as i64, (r.y * h).round() as i64);
+        let (cw, ch) = (((r.width * w).round() as i64).max(1), ((r.height * h).round() as i64).max(1));
+        let edit = AssetEdit::Crop { x, y, width: cw.min(w as i64 - x).max(1), height: ch.min(h as i64 - y).max(1) };
+        ed.saving = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = async {
+                let client = ImmichClient::new(&origin, H::transport()).map_err(|e| e.to_string())?;
+                client.edit_asset(&id, &[edit], &token).await.map_err(|e| e.to_string())
+            }
+            .await;
+            this.update(cx, |t, cx| {
+                match result {
+                    Ok(()) => {
+                        t.thumbs.borrow_mut().forget(&id);
+                        if let Some(v) = t.viewer.as_mut() {
+                            v.editor = None;
+                            v.details = None;
+                        }
+                    }
+                    Err(e) => {
+                        t.status = e;
+                        if let Some(ed) = t.viewer.as_mut().and_then(|v| v.editor.as_mut()) {
+                            ed.saving = false;
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn toggle_info(&mut self, cx: &mut Context<Self>) {
         let Some(v) = self.viewer.as_mut().filter(|v| !v.closing) else { return };
         v.info = !v.info;
@@ -503,6 +768,93 @@ impl Immagine {
         lines
     }
 
+    /// The crop editor: the photo, the box with its handles, "Abbrechen" / "Fertig" and the aspect presets.
+    fn editor_overlay(&self, ed: &Editor, item: &TimelineItem, vw: f32, vh: f32, cx: &mut Context<Self>) -> AnyElement {
+        let top = self.top.max(12.);
+        let bottom = self.bottom.max(10.);
+        let area = (16., top + 64., vw - 32., (vh - bottom - 130. - top - 64.).max(100.));
+        let ar = item.ratio.filter(|r| *r > 0.).map(|r| r as f32).unwrap_or(1.);
+        let (ix, iy, iw, ih) = fit(area, ar);
+        ed.area.set((ix, iy, iw, ih));
+        let (id, origin) = (item.id.clone(), self.origin.clone());
+        let image = thumbs::get(&self.thumbs, &format!("p:{id}"), || format!("{origin}/api/assets/{id}/thumbnail?size=preview"), cx)
+            .or_else(|| thumbs::peek(&self.thumbs, &format!("t:{id}")));
+        let r = ed.rect;
+        let (l, t, w, h) = (ix + r.x as f32 * iw, iy + r.y as f32 * ih, r.width as f32 * iw, r.height as f32 * ih);
+        let rect = |x: f32, y: f32, w: f32, h: f32, color: u32| div().absolute().left(px(x)).top(px(y)).w(px(w.max(0.))).h(px(h.max(0.))).bg(rgba(color));
+        let dim = 0x000000a8;
+        let mut layer = div()
+            .id("viewer-editor")
+            .occlude()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .bg(rgb(0x000000))
+            .child(div().absolute().left(px(ix)).top(px(iy)).w(px(iw)).h(px(ih)).children(image.map(|i| img(i).size_full().object_fit(ObjectFit::Fill))))
+            .child(rect(ix, iy, iw, t - iy, dim))
+            .child(rect(ix, t + h, iw, iy + ih - (t + h), dim))
+            .child(rect(ix, t, l - ix, h, dim))
+            .child(rect(l + w, t, ix + iw - (l + w), h, dim))
+            .child(div().absolute().left(px(l)).top(px(t)).w(px(w)).h(px(h)).border_1().border_color(rgba(0xffffffcc)));
+        for f in [1. / 3., 2. / 3.] {
+            layer = layer.child(rect(l + w * f, t, 1., h, 0xffffff55)).child(rect(l, t + h * f, w, 1., 0xffffff55));
+        }
+        // Corner marks: an L at each corner of the box, lying on the border.
+        for (x, y, sx, sy) in [(l, t, 1., 1.), (l + w, t, -1., 1.), (l, t + h, 1., -1.), (l + w, t + h, -1., -1.)] {
+            let (hx, vy) = (if sx > 0. { x - 1.5 } else { x - 20.5 }, if sy > 0. { y - 1.5 } else { y - 20.5 });
+            layer = layer.child(rect(hx, y - 1.5, 22., 3., 0xffffffff)).child(rect(x - 1.5, vy, 3., 22., 0xffffffff));
+        }
+        let chip = |id: &'static str, label: &str, color: Rgba| {
+            glass_div_with(VIEWER_TINT, 22., 1., true).id(id).h(px(44.)).px_5().flex().items_center().text_color(color).text_size(px(17.)).child(label.to_string())
+        };
+        let ready = ed.pixels.is_some() && !ed.saving;
+        let cancel = chip("editor-cancel", "Abbrechen", rgb(0xffffff).into()).on_click(cx.listener(|this, _, _, cx| this.close_editor(cx)));
+        let mut done = chip("editor-done", if ed.saving { "Sichere …" } else { "Fertig" }, rgb(0xffd60a).into()).opacity(if ready { 1. } else { 0.45 });
+        if ready {
+            done = done.on_click(cx.listener(|this, _, _, cx| this.save_editor(cx)));
+        }
+        layer = layer.child(
+            div()
+                .absolute()
+                .top(px(top + 2.))
+                .left(px(16.))
+                .right(px(16.))
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .child(cancel)
+                .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(0xffffff)).child("Zuschneiden"))
+                .child(done),
+        );
+        let presets = CropAspect::ALL.iter().enumerate().map(|(i, a)| {
+            let a = *a;
+            let color: Rgba = if a == ed.aspect { rgb(0xffd60a).into() } else { rgb(0xffffff).into() };
+            div()
+                .id(("editor-aspect", i))
+                .flex_none()
+                .child(glass_div_with(VIEWER_TINT, 20., 1., true).h(px(40.)).px_4().flex().items_center().text_color(color).text_size(px(15.)).child(a.title()))
+                .on_click(cx.listener(move |this, _, _, cx| this.set_aspect(a, cx)))
+        });
+        layer
+            .child(
+                div()
+                    .id("editor-aspects")
+                    .absolute()
+                    .bottom(px(bottom + 8.))
+                    .left_0()
+                    .w_full()
+                    .px(px(16.))
+                    .flex()
+                    .flex_row()
+                    .gap(px(8.))
+                    .overflow_x_scroll()
+                    .children(presets),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn viewer_overlay(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let v = self.viewer.as_ref()?;
         let vs = window.viewport_size();
@@ -536,9 +888,10 @@ impl Immagine {
                 window.request_animation_frame();
             }
         }
-        // Closing shrinks into the tile of the photo that is shown now (not the one the viewer was opened on); when
-        // that tile is not on screen the photo just fades out.
-        let tile = if closing { self.tile_bounds.borrow().get(&index).copied().filter(|b| f32::from(b.origin.y) < vh && f32::from(b.origin.y + b.size.height) > 0.) } else { v.from };
+        // Closing shrinks into the tile of the photo that is shown now (not the one the viewer was opened on), read
+        // anew every frame so the photo follows the grid when it is scrolled meanwhile; when that tile was not on
+        // screen as closing began the photo just fades out.
+        let tile = if closing { self.tile_bounds.borrow().get(&index).filter(|_| v.into_tile).map(|t| t.now()) } else { v.from };
         let from = tile.map(|b| {
             let (x, y): (f32, f32) = (b.origin.x.into(), b.origin.y.into());
             let (w, h): (f32, f32) = (b.size.width.into(), b.size.height.into());
@@ -586,15 +939,56 @@ impl Immagine {
 
         let chip = |id: &'static str, label: String, color: Rgba| {
             let color = Rgba { a: color.a * k, ..color };
-            glass_div_faded(GLASS_TINT_DARK, 18., k)
+            glass_div_with(VIEWER_TINT, 22., k, true)
                 .id(id)
-                .h(px(36.))
-                .px_4()
+                .h(px(44.))
+                .px_5()
                 .flex()
                 .items_center()
                 .text_color(color)
                 .text_size(px(17.))
                 .child(label)
+        };
+        // Round or pill-shaped dark glass button of the top and bottom bars.
+        let button = |id: &'static str, w: f32| glass_div_with(VIEWER_TINT, 24., k, true).id(id).h(px(48.)).w(px(w)).flex().items_center().justify_center();
+        let white: Rgba = Rgba { a: k, ..rgb(0xffffff).into() };
+
+        // Filmstrip: neighbours around the shown photo, the shown one wider.
+        // The strip follows the swipe: `pos` is the (fractional) photo index under the centre of the screen.
+        let page_dx = if v.mode == DragMode::Dismiss { 0. } else { dx };
+        let pos = (index as f32 - page_dx / (vw + PAGE_GAP)).clamp(0., count.saturating_sub(1) as f32);
+        let strip: Vec<(usize, f32, f32, Option<Arc<RenderImage>>)> = if k > 0. && count > 0 {
+            let lo = (pos.round() as usize).saturating_sub(10);
+            let hi = (pos.round() as usize + 10).min(count - 1);
+            let mut left = 0.;
+            let mut tiles: Vec<(usize, f32, f32, Option<Arc<RenderImage>>)> = (lo..=hi)
+                .filter_map(|j| {
+                    let item = items.get(j)?;
+                    let key = format!("t:{}", item.id);
+                    let image = if snapping { thumbs::peek(&store, &key) } else { thumbs::get(&store, &key, || format!("{origin}/api/assets/{}/thumbnail?size=thumbnail", item.id), cx) };
+                    let w = lerp(22., 38., (1. - (j as f32 - pos).abs()).max(0.));
+                    let tile = (j, left, w, image);
+                    left += w + 2.;
+                    Some(tile)
+                })
+                .collect();
+            let center = |t: &(usize, f32, f32, Option<Arc<RenderImage>>)| t.1 + t.2 / 2.;
+            let fl = (pos.floor() as usize).clamp(lo, hi);
+            let a = tiles.iter().find(|t| t.0 == fl).map(center).unwrap_or(0.);
+            let b = tiles.iter().find(|t| t.0 == (fl + 1).min(hi)).map(center).unwrap_or(a);
+            let c = lerp(a, b, pos - fl as f32);
+            for t in tiles.iter_mut() {
+                t.1 += vw / 2. - c;
+            }
+            tiles
+        } else {
+            Vec::new()
+        };
+        let when = current.as_ref().and_then(|i| i.sort_date.clone()).unwrap_or_default();
+        let time = when.get(11..16).unwrap_or("").to_string();
+        let day = match (date.get(8..10), date.get(5..7), date.get(0..4)) {
+            (Some(d), Some(m), Some(y)) => format!("{d}.{m}.{y}"),
+            _ => String::new(),
         };
 
         let info_panel = (v.info && k > 0.).then(|| {
@@ -602,11 +996,11 @@ impl Immagine {
                 Some(asset) => Self::info_lines(asset),
                 None => vec![("", "Lädt …".to_string())],
             };
-            glass_div_faded(GLASS_TINT_DARK, 24., k)
+            glass_div_with(VIEWER_TINT, 24., k, true)
                 .absolute()
                 .left(px(16.))
                 .right(px(16.))
-                .bottom(px(bottom + 108.))
+                .bottom(px(bottom + 126.))
                 .p_4()
                 .flex()
                 .flex_col()
@@ -622,6 +1016,82 @@ impl Immagine {
                         .child(div().flex_1().text_size(px(15.)).child(value))
                 }))
         });
+
+        let dialog = v.trash.filter(|_| !closing).map(|(start, open)| {
+            let e = ((now - start) / DIALOG_MS).clamp(0., 1.) as f32;
+            if e < 1. {
+                window.request_animation_frame();
+            }
+            let e = 1. - (1. - e).powi(3);
+            let t = if open { e } else { 1. - e };
+            let (bw, bh) = DIALOG_SIZE;
+            // From the trash button (48 pt, bottom right) to the confirmation box.
+            let (x0, y0, w0, h0) = (vw - 24. - 48., vh - bottom - 48., 48., 48.);
+            let (x1, y1) = (vw - 16. - bw, vh - bottom - bh);
+            let content = ((t - 0.55) / 0.45).clamp(0., 1.);
+            let noun = if is_video { "Video" } else { "Foto" };
+            let mut card = glass_div_with(DIALOG_TINT, lerp(24., 34., t), 1., true)
+                .id("viewer-dialog")
+                .occlude()
+                .absolute()
+                .left(px(lerp(x0, x1, t)))
+                .top(px(lerp(y0, y1, t)))
+                .w(px(lerp(w0, bw, t)))
+                .h(px(lerp(h0, bh, t)))
+                .overflow_hidden();
+            if content > 0. {
+                let mut confirm = div()
+                    .id("viewer-dialog-confirm")
+                    .h(px(54.))
+                    .rounded(px(27.))
+                    .bg(rgba(0xffffff1f))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(20.))
+                    .text_color(Rgba { a: content, ..rgb(0xff5a52).into() })
+                    .child(format!("{noun} löschen"));
+                if open {
+                    confirm = confirm.on_click(cx.listener(|this, _, _, cx| this.trash_current(cx)));
+                }
+                card = card.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .w(px(bw))
+                        .h(px(bh))
+                        .p(px(20.))
+                        .flex()
+                        .flex_col()
+                        .justify_between()
+                        .opacity(content)
+                        .child(div().text_size(px(17.)).text_color(rgb(0xffffff)).child(format!("Dieses {noun} wird aus der Mediathek gelöscht. Du kannst noch 30 Tage in „Zuletzt gelöscht“ darauf zugreifen.")))
+                        .child(confirm),
+                );
+            }
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .child(
+                    div()
+                        .id("viewer-dialog-scrim")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .bg(rgba(0x000000ff))
+                        .opacity(0.35 * t)
+                        .on_click(cx.listener(|this, _, _, cx| this.close_trash_dialog(cx))),
+                )
+                .child(card)
+        });
+        let editor = match (v.editor.as_ref(), current.as_ref()) {
+            (Some(ed), Some(item)) if !closing => Some(self.editor_overlay(ed, item, vw, vh, cx)),
+            _ => None,
+        };
 
         // While it shrinks away the viewer lets everything through, so the page below can be scrolled at once.
         let mut root = div().id("viewer-root").absolute().top_0().left_0().size_full();
@@ -708,54 +1178,108 @@ impl Immagine {
                                     el = el.child(div().absolute().left(px(dx + vw + PAGE_GAP)).top_0().w(px(vw)).h(px(vh)).children(page(index + 1, false)));
                                 }
                             }
-                            el.child(
-                                div()
-                                    .absolute()
-                                    .bottom(px(bottom + 4.))
-                                    .w_full()
-                                    .flex()
-                                    .justify_center()
-                                    .opacity(t * fade * k)
-                                    .text_color(rgb(0xffffff))
-                                    .text_size(px(15.))
-                                    .child(format!("{date}  ·  {} von {count}", index + 1)),
-                            )
+                            el
                         }),
                 )
                 .children(info_panel)
                 .children((k > 0.).then(|| {
                     let live = !closing;
-                    let mut fav = glass_div_faded(GLASS_TINT_DARK, 18., k)
-                        .id("viewer-fav")
-                        .h(px(36.))
-                        .w(px(48.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(heart(favorite, k));
-                    let mut info = chip("viewer-info", "Info".into(), if v.info { rgb(BLUE).into() } else { rgb(0xffffff).into() });
+                    let mut fav = div().id("viewer-fav").w(px(52.)).h(px(48.)).flex().items_center().justify_center().child(heart(favorite, k));
+                    let mut info = div().id("viewer-info").w(px(52.)).h(px(48.)).flex().items_center().justify_center().child(super::icons::glyph(super::icons::Glyph::Info, 26., if v.info { Rgba { a: k, ..rgb(BLUE).into() } } else { white }));
                     if live {
                         fav = fav.on_click(cx.listener(|this, _, _, cx| this.toggle_favorite(cx)));
                         info = info.on_click(cx.listener(|this, _, _, cx| this.toggle_info(cx)));
                     }
+                    let mut sliders = div().id("viewer-edit").w(px(52.)).h(px(48.)).flex().items_center().justify_center().child(super::icons::glyph(super::icons::Glyph::Sliders, 26., white));
+                    if live && !is_video {
+                        sliders = sliders.on_click(cx.listener(|this, _, _, cx| this.open_editor(cx)));
+                    }
+                    let pill = button("viewer-pill", 164.).child(fav).child(info).child(sliders);
+                    let mut share = button("viewer-share", 48.).child(super::icons::glyph(super::icons::Glyph::Share, 26., white));
+                    let mut trash = button("viewer-trash", 48.).child(super::icons::glyph(super::icons::Glyph::Trash, 26., white));
+                    if live {
+                        share = share.on_click(cx.listener(|this, _, _, cx| this.share_current(cx)));
+                        trash = trash.on_click(cx.listener(|this, _, _, cx| this.open_trash_dialog(cx)));
+                    }
+                    // While the confirmation morphs out of the trash button, the button itself is gone.
+                    let trash = if v.trash.is_some() { div().w(px(48.)).h(px(48.)).into_any_element() } else { trash.into_any_element() };
+                    let bar = div()
+                        .absolute()
+                        .bottom(px(bottom))
+                        .left(px(24.))
+                        .right(px(24.))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .child(share)
+                        .child(pill)
+                        .child(trash);
+                    let filmstrip = div()
+                        .absolute()
+                        .bottom(px(bottom + 66.))
+                        .left_0()
+                        .w_full()
+                        .h(px(34.))
+                        .overflow_hidden()
+                        .opacity(k)
+                        .children(strip.into_iter().map(|(j, x, w, image)| {
+                            let tile = div().id(("viewer-film", j)).absolute().left(px(x)).top_0().w(px(w)).h(px(34.)).rounded(px(3.)).overflow_hidden().bg(rgb(0x1c1c1e));
+                            let tile = match image {
+                                Some(image) => tile.child(img(image).size_full().object_fit(ObjectFit::Cover)),
+                                None => tile,
+                            };
+                            if live && j != index {
+                                tile.on_click(cx.listener(move |this, _, _, cx| this.jump_to(j, cx)))
+                            } else {
+                                tile
+                            }
+                        }));
                     div()
                         .absolute()
-                        .bottom(px(bottom + 40.))
-                        .w_full()
-                        .flex()
-                        .justify_center()
-                        .gap_3()
-                        .child(fav)
-                        .child(info)
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .child(filmstrip)
+                        .child(bar)
                         .children((is_video && !playing).then(|| {
                             let play = chip("viewer-play", "Abspielen".into(), rgb(0xffffff).into());
-                            if live { play.on_click(cx.listener(|this, _, _, cx| this.play_video(cx))) } else { play }
+                            let play = if live { play.on_click(cx.listener(|this, _, _, cx| this.play_video(cx))) } else { play };
+                            div().absolute().bottom(px(bottom + 112.)).w_full().flex().justify_center().child(play)
                         }))
                 }))
                 .children((k > 0.).then(|| {
-                    let back = super::icons::back_chip_faded(GLASS_TINT_DARK, "viewer-done", rgb(0xffffff).into(), k).absolute().top(px(top + 8.)).left(px(16.));
-                    if closing { back } else { back.on_click(cx.listener(|this, _, _, cx| this.close_viewer(cx))) }
+                    let live = !closing;
+                    let mut back = button("viewer-done", 44.).h(px(44.)).active(|s| s.opacity(0.6)).child(super::icons::chevron(white));
+                    if live {
+                        back = back.on_click(cx.listener(|this, _, _, cx| this.close_viewer(cx)));
+                    }
+                    let title = glass_div_with(VIEWER_TINT, 22., k, true)
+                        .w(px(160.))
+                        .h(px(44.))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .text_color(white)
+                        .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(day))
+                        .child(div().text_size(px(14.)).child(time));
+                    let spacer = div().w(px(44.)).h(px(44.));
+                    div()
+                        .absolute()
+                        .top(px(top + 2.))
+                        .left(px(16.))
+                        .right(px(16.))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .child(back)
+                        .child(title)
+                        .child(spacer)
                 }))
+                .children(dialog)
+                .children(editor)
                 .into_any_element(),
         )
     }
