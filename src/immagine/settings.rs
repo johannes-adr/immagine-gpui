@@ -111,7 +111,18 @@ impl Immagine {
             "Speicher",
             p,
             vec![
-                row(p, "Mediathek (IndexedDB)", st.store_bytes.map(size).unwrap_or_else(unknown), true),
+                row(
+                    p,
+                    "Belegt / Kapazität",
+                    match info.as_ref().map(|i| (i.storage_used, i.storage_quota)) {
+                        None => unknown(),
+                        Some((Some(used), Some(quota))) => format!("{} / {}", size(used), size(quota)),
+                        Some((Some(used), None)) => size(used),
+                        Some(_) => "unbekannt".into(),
+                    },
+                    true,
+                ),
+                row(p, "Mediathek (IndexedDB)", st.store_bytes.map(size).unwrap_or_else(unknown), false),
                 row(p, "Video-Cache (IndexedDB)", st.video_bytes.map(size).unwrap_or_else(unknown), false),
                 row(p, "Downloads (IndexedDB)", st.download_bytes.map(size).unwrap_or_else(unknown), false),
             ],

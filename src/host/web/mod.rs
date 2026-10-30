@@ -121,7 +121,8 @@ impl Host for Web {
         let probe = js_sys::Function::new_no_args(
             "return (async()=>{const k=('caches' in self)?await caches.keys():[];\
              const v=k.filter(n=>n.startsWith('immagine-')).sort().pop();\
-             return JSON.stringify({v:v?v.slice(9):null,\
+             const e=(navigator.storage&&navigator.storage.estimate)?await navigator.storage.estimate().catch(()=>null):null;\
+             return JSON.stringify({v:v?v.slice(9):null,u:e?e.usage:null,q:e?e.quota:null,\
              s:matchMedia('(display-mode: standalone)').matches||navigator.standalone===true,\
              t:self.crossOriginIsolated===true})})()",
         );
@@ -134,6 +135,8 @@ impl Host for Web {
             pwa_version: json["v"].as_str().map(str::to_string),
             standalone: json["s"].as_bool().unwrap_or(false),
             threads: json["t"].as_bool().unwrap_or(false),
+            storage_used: json["u"].as_f64().map(|n| n as u64),
+            storage_quota: json["q"].as_f64().map(|n| n as u64),
         }
     }
 

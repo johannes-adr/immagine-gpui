@@ -39,6 +39,10 @@ pub struct AppInfo {
     pub standalone: bool,
     /// The worker threads are usable (web: the page is cross-origin isolated).
     pub threads: bool,
+    /// Bytes the app uses of the browser's storage and the quota it may use (`navigator.storage.estimate()`; the
+    /// quota is the browser's own figure, not free disk space). `None` where the platform does not say.
+    pub storage_used: Option<u64>,
+    pub storage_quota: Option<u64>,
 }
 
 /// Answer to a range request.
