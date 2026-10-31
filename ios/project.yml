@@ -1,0 +1,24 @@
+# Wraps the Rust binary (cargo build --release --target aarch64-apple-ios) in a signed app for a device.
+# `./build-ios.sh` builds, generates this project and installs on a connected iPhone.
+name: Immagine
+options:
+  deploymentTarget:
+    iOS: "15.0"
+targets:
+  Immagine:
+    type: application
+    platform: iOS
+    sources: [main.c]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.johannesandrade.immagine
+        INFOPLIST_FILE: Info.plist
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ZK5Q4XC8XR
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+    preBuildScripts: []
+    postBuildScripts:
+      - name: Copy Rust binary
+        script: |
+          cp "${SRCROOT}/../target/aarch64-apple-ios/release/immagine-desktop" "${TARGET_BUILD_DIR}/${EXECUTABLE_PATH}"
+        outputFiles: []
