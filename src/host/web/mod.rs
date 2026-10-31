@@ -117,6 +117,10 @@ impl Host for Web {
         idb::keys(db).await
     }
 
+    fn renderer_name(webgpu: bool) -> &'static str {
+        if webgpu { "WebGPU" } else { "WebGL2" }
+    }
+
     async fn app_info() -> AppInfo {
         let probe = js_sys::Function::new_no_args(
             "return (async()=>{const k=('caches' in self)?await caches.keys():[];\
@@ -137,6 +141,7 @@ impl Host for Web {
             threads: json["t"].as_bool().unwrap_or(false),
             storage_used: json["u"].as_f64().map(|n| n as u64),
             storage_quota: json["q"].as_f64().map(|n| n as u64),
+            native: false,
         }
     }
 

@@ -37,16 +37,24 @@ ureq = { version = "2", features = ["cookies"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 futures-channel = "0.3"
 
+# gpui-kit leaves its platform re-export out on iOS, so the native iOS backend (UIKit + the patched Metal renderer) comes in directly.
+[target.'cfg(target_os = "ios")'.dependencies]
+gpui_platform = { package = "gpui-pre-platform", version = "0.3.10" }
+
 [[bin]]
 name = "immagine-desktop"
 path = "src/bin/immagine-desktop.rs"
 
 # GPUI patched with a liquid-glass renderer pass (see vendor/).
 [patch.crates-io]
+# display link frame-rate range for 120 Hz (see AGENTS.md "Native iOS")
+gpui-pre-ios = { path = "vendor/gpui-pre-ios" }
 gpui-pre = { path = "vendor/gpui-pre" }
 gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
 gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
 gpui-pre-web = { path = "vendor/gpui-pre-web" }
+# gpui-kit input field: reports its text length so the iOS keyboard can open (see AGENTS.md "Native iOS")
+gpui-base = { path = "vendor/gpui-base" }
 
 [profile.release]
 lto = "fat"

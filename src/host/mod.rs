@@ -79,6 +79,8 @@ pub struct AppInfo {
     pub pwa_version: Option<String>,
     /// Running as an installed app (web: standalone display mode).
     pub standalone: bool,
+    /// A native build (Metal/Vulkan window, files as storage): there is no PWA version, browser mode or WebGL.
+    pub native: bool,
     /// The worker threads are usable (web: the page is cross-origin isolated).
     pub threads: bool,
     /// Bytes the app uses of the browser's storage and the quota it may use (`navigator.storage.estimate()`; the
@@ -201,6 +203,8 @@ pub trait Host: 'static {
     async fn blob_size(db: &str) -> Result<u64, String>;
     /// Keys stored in `db`.
     async fn blob_keys(db: &str) -> Result<Vec<String>, String>;
+    /// Name of the renderer for the FPS badge (`webgpu`: the page got a WebGPU device; native hosts ignore it).
+    fn renderer_name(webgpu: bool) -> &'static str;
     /// Installation details for the settings sheet.
     async fn app_info() -> AppInfo;
 

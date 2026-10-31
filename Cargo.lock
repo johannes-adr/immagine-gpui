@@ -2036,8 +2036,6 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d862bc8f2e27710039013d075ac4995892e9687ff207fa530f880cbcd513936f"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -2313,8 +2311,6 @@ dependencies = [
 [[package]]
 name = "gpui-pre-ios"
 version = "0.3.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5773a1e3a399df64f3ecc5538727fd0575279bd190959cf97a9e2b698c0310b8"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -2662,6 +2658,7 @@ dependencies = [
  "futures-lite",
  "gpui-kit",
  "gpui-pre",
+ "gpui-pre-platform",
  "image",
  "js-sys",
  "mp4",

@@ -152,6 +152,15 @@ fn oldest_first(mut items: Vec<TimelineItem>) -> Vec<TimelineItem> {
 }
 
 impl Immagine {
+    /// Height the on-screen keyboard covers at the bottom of the window (0 without one). Web reports it through
+    /// the visual viewport, UIKit through the window insets.
+    pub(crate) fn keyboard_height(window: &Window) -> f32 {
+        let viewport: f32 = window.viewport_size().height.into();
+        let visible = window.visual_viewport_bounds();
+        let by_viewport = viewport - f32::from(visible.origin.y + visible.size.height);
+        by_viewport.max(f32::from(window.insets().ime.bottom)).max(0.)
+    }
+
     pub(crate) fn new(top: f32, bottom: f32, dark: bool, webgpu: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let initial_server = H::origin();
         let server = cx.new(|cx| {
@@ -165,8 +174,9 @@ impl Immagine {
             state.set_masked(true, window, cx);
             state
         });
-        cx.subscribe_in(&password, window, |this, _, event: &InputEvent, _, cx| {
+        cx.subscribe_in(&password, window, |this, _, event: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = event {
+                window.dismiss_virtual_keyboard();
                 this.log_in(cx);
             }
         })
@@ -508,6 +518,14 @@ impl Immagine {
 impl Render for Immagine {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::new(self.dark);
+        // Native hosts know the safe area only once the window exists and report changes later (rotation,
+        // keyboard); the web host passes it once through `new`, and reports none here.
+        let safe = window.insets().safe_area;
+        let (safe_top, safe_bottom) = (f32::from(safe.top), f32::from(safe.bottom));
+        if safe_top > 0. || safe_bottom > 0. {
+            self.top = safe_top;
+            self.bottom = safe_bottom;
+        }
         self.rubber.tick(window);
         self.settings.sheet.tick(window);
         self.settings.rubber.tick(window);
@@ -520,7 +538,7 @@ impl Render for Immagine {
         let background = if self.dark { rgb(0x000000) } else { rgb(0xffffff) };
         let content = match self.screen {
             Screen::Loading => div().into_any_element(),
-            Screen::Login => self.login_view(&p, cx).into_any_element(),
+            Screen::Login => self.login_view(&p, window, cx).into_any_element(),
             Screen::Timeline if self.tab == 0 && self.search.open => self.search_view(&p, window, cx),
             Screen::Timeline if self.tab == 0 => match self.range_mode {
                 0 => self.years_view(&p, window, cx),
@@ -590,6 +608,6 @@ impl Render for Immagine {
             .children(select_overlay)
             .children(settings)
             .children(jobs)
-            .children(self.debug.then(|| fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, self.webgpu)))
+            .children(self.debug.then(|| fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, H::renderer_name(self.webgpu))))
     }
 }

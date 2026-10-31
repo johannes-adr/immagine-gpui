@@ -49,7 +49,7 @@ impl FpsMeter {
 }
 
 /// The FPS readout in the top-left corner. Its `canvas` paint callback counts painted frames.
-pub(crate) fn fps_badge(meter: Rc<FpsMeter>, top: f32, fps: u32, worst_ms: u32, webgpu: bool) -> impl IntoElement {
+pub(crate) fn fps_badge(meter: Rc<FpsMeter>, top: f32, fps: u32, worst_ms: u32, renderer: &'static str) -> impl IntoElement {
     div()
         .absolute()
         .left(px(20.))
@@ -67,6 +67,6 @@ pub(crate) fn fps_badge(meter: Rc<FpsMeter>, top: f32, fps: u32, worst_ms: u32, 
             "{} FPS · {} ms worst · {}",
             fps,
             worst_ms,
-            if webgpu { "WebGPU" } else { "WebGL2" }
+            renderer
         ))
 }

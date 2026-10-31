@@ -86,9 +86,12 @@ impl Immagine {
     pub(super) fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.search.input.is_none() {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder("Mediathek durchsuchen …"));
-            cx.subscribe_in(&input, window, |this, _, event: &InputEvent, _, cx| match event {
+            cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => this.search_typed(cx),
-                InputEvent::PressEnter { .. } => this.start_search(cx),
+                InputEvent::PressEnter { .. } => {
+                    window.dismiss_virtual_keyboard();
+                    this.start_search(cx)
+                }
                 _ => {}
             })
             .detach();
@@ -236,9 +239,7 @@ impl Immagine {
     /// The bottom bar of the search: a glass field with a lupe and a round close button, riding above the keyboard.
     pub(super) fn search_bar(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         const H: f32 = 56.;
-        let viewport: f32 = window.viewport_size().height.into();
-        let visible = window.visual_viewport_bounds();
-        let keyboard = (viewport - f32::from(visible.origin.y + visible.size.height)).max(0.);
+        let keyboard = Self::keyboard_height(window);
         let bottom = if keyboard > 0. { keyboard + 8. } else { self.bottom.max(10.) };
 
         let field = self.search.input.as_ref().map(|input| {

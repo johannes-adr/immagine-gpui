@@ -3,10 +3,11 @@
 //! * HTTP: `ureq` on a worker thread per request, one shared agent so the Immich cookie persists.
 //! * Persistence: plain files below [`data_dir`].
 //! * Images: downloaded and decoded with the `image` crate on a worker thread.
-//! * No video decoder, no audio output and no touch-gesture source: `video_decoder`, `audio_output` and `install_gestures`
-//!   return `None` (mouse and trackpad input arrive through GPUI itself).
+//! * No video decoder and no audio output: `video_decoder` and `audio_output` return `None`. `install_gestures` reports
+//!   pinch and raw touches from GPUI's touch observer (iOS only, see `gestures`); mouse and trackpad arrive through GPUI itself.
 
 mod blocking;
+mod gestures;
 pub mod entry;
 mod http;
 mod store;
@@ -41,7 +42,7 @@ impl Host for Desktop {
     type Clock = SystemTimeClock;
     type VideoDecoder = NoVideoDecoder;
     type AudioOut = NoAudioOut;
-    type Gestures = std::convert::Infallible;
+    type Gestures = gestures::GestureHandle;
 
     fn transport() -> Self::Transport {
         http::UreqTransport
@@ -114,9 +115,14 @@ impl Host for Desktop {
         blocking::run(move || Ok(store::blob_keys(&db))).await
     }
 
-    /// No service worker, no installed-app mode, native threads: nothing to report.
+    fn renderer_name(_webgpu: bool) -> &'static str {
+        "Metal"
+    }
+
+    /// No service worker, no installed-app mode, native threads; storage is the size of the data directory.
     async fn app_info() -> AppInfo {
-        AppInfo { threads: true, ..AppInfo::default() }
+        let used = blocking::run(|| Ok(store::data_size())).await.ok();
+        AppInfo { threads: true, native: true, storage_used: used, ..AppInfo::default() }
     }
 
     async fn blob_put(db: &str, key: &str, bytes: &[u8]) -> Result<(), String> {
@@ -184,8 +190,8 @@ impl Host for Desktop {
         None
     }
 
-    fn install_gestures(_on_event: impl Fn(Pinch) + 'static) -> Option<Self::Gestures> {
-        None
+    fn install_gestures(on_event: impl Fn(Pinch) + 'static) -> Option<Self::Gestures> {
+        Some(gestures::install(on_event))
     }
 }
 

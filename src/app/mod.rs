@@ -167,6 +167,6 @@ impl Render for Todos {
             )
             .child(self.tab_bar(&p, cx))
             .children(self.viewer_overlay(window, cx))
-            .child(fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, self.webgpu))
+            .child(fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, <crate::host::Current as crate::host::Host>::renderer_name(self.webgpu)))
     }
 }

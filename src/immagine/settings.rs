@@ -205,25 +205,26 @@ impl Immagine {
                 row(p, "Video-Cache", usage_text(st.video), false),
             ],
         );
-        let app = group(
-            card,
-            "App",
-            p,
-            vec![
-                row(
-                    p,
-                    "PWA-Version",
-                    match &info {
-                        None => unknown(),
-                        Some(i) => i.pwa_version.clone().unwrap_or_else(|| "nicht installiert".into()),
-                    },
-                    true,
-                ),
-                row(p, "Modus", info.as_ref().map_or_else(unknown, |i| if i.standalone { "Installiert".into() } else { "Browser".into() }), false),
-                row(p, "Renderer", if self.webgpu { "WebGPU".into() } else { "WebGL (langsamer)".into() }, false),
-                row(p, "Threads", info.as_ref().map_or_else(unknown, |i| if i.threads { "An".into() } else { "Aus".into() }), false),
-            ],
-        );
+        let native = info.as_ref().is_some_and(|i| i.native);
+        let mut app_rows = Vec::new();
+        if native {
+            app_rows.push(row(p, "Modus", "Native App".into(), true));
+            app_rows.push(row(p, "Renderer", "Metal".into(), false));
+        } else {
+            app_rows.push(row(
+                p,
+                "PWA-Version",
+                match &info {
+                    None => unknown(),
+                    Some(i) => i.pwa_version.clone().unwrap_or_else(|| "nicht installiert".into()),
+                },
+                true,
+            ));
+            app_rows.push(row(p, "Modus", info.as_ref().map_or_else(unknown, |i| if i.standalone { "Installiert".into() } else { "Browser".into() }), false));
+            app_rows.push(row(p, "Renderer", if self.webgpu { "WebGPU".into() } else { "WebGL (langsamer)".into() }, false));
+        }
+        app_rows.push(row(p, "Threads", info.as_ref().map_or_else(unknown, |i| if i.threads { "An".into() } else { "Aus".into() }), false));
+        let app = group(card, "App", p, app_rows);
         let debug = self.debug;
         let toggle = div().border_t_1().border_color(p.separator).child(
             div()

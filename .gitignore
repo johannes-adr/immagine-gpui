@@ -5,3 +5,5 @@ certs/
 # Proprietary system fonts: supply your own (see README)
 assets/*.ttf
 .claude/worktrees/
+ios/dd/
+ios/Immagine.xcodeproj/

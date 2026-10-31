@@ -6,7 +6,7 @@ fn data_dir() -> PathBuf {
         return dir.into();
     }
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-    if cfg!(target_os = "macos") {
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
         home.join("Library/Application Support/immagine")
     } else {
         std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share")).join("immagine")
@@ -60,6 +60,22 @@ pub fn blob_keys(db: &str) -> Vec<String> {
             name.strip_prefix(&prefix)?.strip_suffix(".bin").map(str::to_string)
         })
         .collect()
+}
+
+/// Bytes of every file under the data directory (blobs and settings).
+pub fn data_size() -> u64 {
+    fn walk(dir: &std::path::Path) -> u64 {
+        let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+        entries
+            .flatten()
+            .map(|e| match e.metadata() {
+                Ok(m) if m.is_dir() => walk(&e.path()),
+                Ok(m) => m.len(),
+                Err(_) => 0,
+            })
+            .sum()
+    }
+    walk(&data_dir())
 }
 
 fn setting_path(key: &str) -> PathBuf {
