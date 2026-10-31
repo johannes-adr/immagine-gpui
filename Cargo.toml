@@ -47,6 +47,8 @@ path = "src/bin/immagine-desktop.rs"
 
 # GPUI patched with a liquid-glass renderer pass (see vendor/).
 [patch.crates-io]
+# display link frame-rate range for 120 Hz (see AGENTS.md "Native iOS")
+gpui-pre-ios = { path = "vendor/gpui-pre-ios" }
 gpui-pre = { path = "vendor/gpui-pre" }
 gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
 gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }

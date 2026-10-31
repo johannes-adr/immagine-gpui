@@ -115,6 +115,10 @@ impl Host for Desktop {
         blocking::run(move || Ok(store::blob_keys(&db))).await
     }
 
+    fn renderer_name(_webgpu: bool) -> &'static str {
+        "Metal"
+    }
+
     /// No service worker, no installed-app mode, native threads; storage is the size of the data directory.
     async fn app_info() -> AppInfo {
         let used = blocking::run(|| Ok(store::data_size())).await.ok();

@@ -608,6 +608,6 @@ impl Render for Immagine {
             .children(select_overlay)
             .children(settings)
             .children(jobs)
-            .children(self.debug.then(|| fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, self.webgpu)))
+            .children(self.debug.then(|| fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, H::renderer_name(self.webgpu))))
     }
 }

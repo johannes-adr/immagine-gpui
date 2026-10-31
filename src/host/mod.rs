@@ -203,6 +203,8 @@ pub trait Host: 'static {
     async fn blob_size(db: &str) -> Result<u64, String>;
     /// Keys stored in `db`.
     async fn blob_keys(db: &str) -> Result<Vec<String>, String>;
+    /// Name of the renderer for the FPS badge (`webgpu`: the page got a WebGPU device; native hosts ignore it).
+    fn renderer_name(webgpu: bool) -> &'static str;
     /// Installation details for the settings sheet.
     async fn app_info() -> AppInfo;
 
