@@ -334,7 +334,7 @@ define_class!(
                     CADisplayLink::displayLinkWithTarget_selector(self, sel!(renderFrame:));
                 display_link.setPaused(true);
                 // Without a range iOS keeps ProMotion iPhones at 60 Hz (together with CADisableMinimumFrameDuration in Info.plist).
-                display_link.setPreferredFrameRateRange(CAFrameRateRange { minimum: 60., maximum: 120., preferred: 120. });
+                display_link.setPreferredFrameRateRange(CAFrameRateRange { minimum: 80., maximum: 120., preferred: 120. });
                 display_link.addToRunLoop_forMode(
                     &NSRunLoop::mainRunLoop(),
                     NSRunLoopCommonModes,
