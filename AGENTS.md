@@ -214,3 +214,17 @@ Videos are played by the app itself, no `<video>` element and no browser control
 - One runner loop at a time, one item at a time, through `downloads::fetch_and_store` (same path as the viewer's download button: thumbnail, preview, original/H.264 in 2 MB ranges, progress in `Downloads.busy`). Pause/cancel is checked between the ranges (`keep_going`), so a big video stops mid-way and restarts from scratch on resume. `serial` bumps at logout (stops the loop); logout clears the db.
 - Running time is summed per job (`active_ms`, `JobsState::tick`), so pauses and restarts do not count; the sheet shows count of total, skipped, failed, MB, running time, average MB/s, the current item's percent and the last error.
 - Sheet: the list button (`Glyph::Jobs`, blue badge = unfinished jobs) left of the gear in Sammlungen; a second `Sheet` routed like settings (`jobs_pinch` from `Immagine::pinch`, `jobs_scroll_event` from `render`'s rubber-band input). Verified in the iOS 27 simulator: job progress, pause, reload stays paused, resume + immediate reload continues and finishes.
+
+## Native iOS (spike)
+
+- The existing desktop entry runs on iOS through Zed's own `gpui-pre-ios 0.3.10` (UIScene lifecycle, UIKit, shared `gpui-pre-apple` Metal renderer, so our patched glass is used). `gpui-kit` leaves `gpui_kit::platform` out on iOS, so `host/desktop/entry.rs` calls `gpui_platform::application()` there (`gpui-pre-platform` as an iOS-only dependency in `Cargo.toml`).
+- Build and run in the simulator (no Xcode project needed):
+  ```sh
+  IPHONEOS_DEPLOYMENT_TARGET=15.0 cargo build --bin immagine-desktop --target aarch64-apple-ios-sim
+  A=target/ios/Immagine.app; mkdir -p $A; cp target/aarch64-apple-ios-sim/debug/immagine-desktop $A/immagine
+  # Info.plist from the gpui-pre-ios crate's examples/ios/app/Info.plist: CFBundleExecutable=immagine, own bundle id; its UIApplicationSceneManifest with UISceneDelegateClassName=GPUIIosSceneDelegate is required (iOS 27 aborts without a scene lifecycle)
+  codesign --force --sign - $A   # then launch with the simulator tool or `xcrun simctl install/launch`
+  ```
+- Verified on the iOS 27 simulator: login screen with glass fields renders, a tap focuses a field. Not yet done: logging in against a server, pinch/drag events arrive (see below) but zoom/selection on a real timeline are untested (needs a login), no video/audio, data dir and token storage not checked on iOS, no Xcode project/icon/signing for a device.
+- `itsbalamurali/gpui-mobile` was tried first: it builds for iOS 18.4 but crashes on iOS 27 (no scene lifecycle) and targets gpui 0.3.6 with wgpu; not needed now.
+- **Gestures on iOS:** `gpui-pre-ios` delivers raw `TouchEvent`s, which GPUI turns into taps/scrolls; there is no pinch. `vendor/gpui-pre` therefore has `set_touch_observer` (window.rs): it sees each raw touch, deferred through the foreground executor because the App is borrowed during dispatch (calling an entity update synchronously panics with "RefCell already borrowed"). `host/desktop/gestures.rs` (`Host::install_gestures`) maps touches to `Pinch::Down/Drag/Up/Begin/Move/End`, same as `host/web/pinch.rs`. Checked in the iOS 27 simulator with the tool's `touch2_path` (events and ratios correct); the pinch zoom of the real grid and the swipe selection are not tested yet.

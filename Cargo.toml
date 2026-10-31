@@ -37,6 +37,10 @@ ureq = { version = "2", features = ["cookies"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 futures-channel = "0.3"
 
+# gpui-kit leaves its platform re-export out on iOS, so the native iOS backend (UIKit + the patched Metal renderer) comes in directly.
+[target.'cfg(target_os = "ios")'.dependencies]
+gpui_platform = { package = "gpui-pre-platform", version = "0.3.10" }
+
 [[bin]]
 name = "immagine-desktop"
 path = "src/bin/immagine-desktop.rs"

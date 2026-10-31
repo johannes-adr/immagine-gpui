@@ -2662,6 +2662,7 @@ dependencies = [
  "futures-lite",
  "gpui-kit",
  "gpui-pre",
+ "gpui-pre-platform",
  "image",
  "js-sys",
  "mp4",

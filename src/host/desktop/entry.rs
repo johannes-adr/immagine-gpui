@@ -7,7 +7,7 @@ pub fn run() {
     if let Some(variant) = std::env::var("IMMAGINE_GLASS").ok().and_then(|v| v.parse().ok()) {
         gpui_kit::set_glass_variant(variant);
     }
-    gpui_kit::platform::application().run(|cx| {
+    application().run(|cx| {
         gpui_kit::init(cx);
         if matches!(cx.window_appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark) {
             gpui_kit::component::theme::Theme::change(gpui_kit::component::theme::ThemeMode::Dark, None, cx);
@@ -21,4 +21,14 @@ pub fn run() {
             .expect("failed to open window");
         cx.activate(true);
     });
+}
+
+#[cfg(not(target_os = "ios"))]
+fn application() -> gpui_kit::Application {
+    gpui_kit::platform::application()
+}
+
+#[cfg(target_os = "ios")]
+fn application() -> gpui_kit::Application {
+    gpui_platform::application()
 }

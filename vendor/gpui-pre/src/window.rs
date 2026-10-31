@@ -340,6 +340,9 @@ slotmap::new_key_type! {
 }
 
 thread_local! {
+    /// Sees every raw touch before gesture recognition (see `set_touch_observer`).
+    static TOUCH_OBSERVER: RefCell<Option<Rc<dyn Fn(&TouchEvent)>>> = const { RefCell::new(None) };
+
     /// Fallback arena used when no app-specific arena is active.
     /// In production, each window draw sets CURRENT_ELEMENT_ARENA to the app's arena.
     pub(crate) static ELEMENT_ARENA: RefCell<Arena> = RefCell::new(Arena::new(1024 * 1024));
@@ -5902,6 +5905,14 @@ impl Window {
     /// dispatches whatever it resolves (scroll steps, synthesized taps)
     /// through the ordinary mouse-event path.
     fn dispatch_touch_event(&mut self, event: &TouchEvent, cx: &mut App) {
+        let observer = TOUCH_OBSERVER.with(|o| o.borrow().clone());
+        if let Some(observer) = observer {
+            // Runs after the current update returns (the App is borrowed here), in arrival order.
+            let event = event.clone();
+            cx.foreground_executor()
+                .spawn(async move { observer(&event) })
+                .detach();
+        }
         let mut event = event.clone();
         if !self.touch_prediction_enabled {
             event.predicted_position = None;
@@ -10079,4 +10090,11 @@ impl Default for GlassStyle {
             fresh_backdrop: false,
         }
     }
+}
+
+/// Installs (or with `None` removes) an observer that sees every raw [`TouchEvent`] on the main thread, in
+/// arrival order, once the update that delivered it has returned (so it may update entities). It cannot
+/// consume the event; apps use it for multi-touch gestures (pinch) GPUI does not recognize itself.
+pub fn set_touch_observer(observer: Option<Rc<dyn Fn(&TouchEvent)>>) {
+    TOUCH_OBSERVER.with(|o| *o.borrow_mut() = observer);
 }
