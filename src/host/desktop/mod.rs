@@ -115,9 +115,10 @@ impl Host for Desktop {
         blocking::run(move || Ok(store::blob_keys(&db))).await
     }
 
-    /// No service worker, no installed-app mode, native threads: nothing to report.
+    /// No service worker, no installed-app mode, native threads; storage is the size of the data directory.
     async fn app_info() -> AppInfo {
-        AppInfo { threads: true, ..AppInfo::default() }
+        let used = blocking::run(|| Ok(store::data_size())).await.ok();
+        AppInfo { threads: true, native: true, storage_used: used, ..AppInfo::default() }
     }
 
     async fn blob_put(db: &str, key: &str, bytes: &[u8]) -> Result<(), String> {

@@ -137,6 +137,7 @@ impl Host for Web {
             threads: json["t"].as_bool().unwrap_or(false),
             storage_used: json["u"].as_f64().map(|n| n as u64),
             storage_quota: json["q"].as_f64().map(|n| n as u64),
+            native: false,
         }
     }
 

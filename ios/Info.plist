@@ -26,6 +26,7 @@
 			</array>
 		</dict>
 	</dict>
+	<key>CADisableMinimumFrameDuration</key><true/>
 	<key>UILaunchScreen</key><dict/>
 	<key>UIRequiresFullScreen</key><true/>
 	<key>UISupportedInterfaceOrientations</key>

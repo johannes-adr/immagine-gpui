@@ -4492,6 +4492,11 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // iOS delivers the return key as typed "\n" (no key event): in a single-line field it is the Enter action.
+        if new_text == "\n" && self.is_single_line() && self.ime_marked_range.is_none() {
+            self.enter(&Enter { secondary: false, shift: false }, window, cx);
+            return;
+        }
         let requested_intent = self.undo_manager.take_pending_intent();
         if !self.is_editable() {
             return;
