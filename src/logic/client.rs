@@ -292,6 +292,12 @@ impl<T: HttpTransport> ImmichClient<T> {
         self.fetch(request(Method::Put, "/api/assets", Some(token), Some(body))).await.map(|_| ())
     }
 
+    /// `"archive"` or `"timeline"` (`PUT /api/assets`, `visibility`).
+    pub async fn set_visibility(&self, ids: &[String], visibility: &str, token: &str) -> Result<(), ClientError> {
+        let body = json_body(&IdsVisibility { ids, visibility })?;
+        self.fetch(request(Method::Put, "/api/assets", Some(token), Some(body))).await.map(|_| ())
+    }
+
     /// Moves the photo elsewhere; Immich geocodes the place names itself.
     pub async fn set_location(&self, id: &str, latitude: f64, longitude: f64, token: &str) -> Result<Asset, ClientError> {
         let body = json_body(&LocationBody { latitude, longitude })?;
@@ -591,6 +597,12 @@ struct Ids<'a> {
 struct IdsFavorite<'a> {
     ids: &'a [String],
     is_favorite: bool,
+}
+
+#[derive(Serialize)]
+struct IdsVisibility<'a> {
+    ids: &'a [String],
+    visibility: &'a str,
 }
 
 #[derive(Serialize)]
@@ -1032,6 +1044,16 @@ mod tests {
         assert_eq!(req.method, Method::Put);
         assert_eq!(req.path, "/api/assets");
         assert_eq!(body_json(&req), json!({"ids": [ASSET], "isFavorite": true}));
+    }
+
+    #[test]
+    fn set_visibility_puts_the_visibility_for_all_ids() {
+        let client = client_with(HttpResponse::json(204, ""));
+        block_on(client.set_visibility(&[ASSET.to_string()], "archive", TOKEN)).unwrap();
+        let req = sent(&client);
+        assert_eq!(req.method, Method::Put);
+        assert_eq!(req.path, "/api/assets");
+        assert_eq!(body_json(&req), json!({"ids": [ASSET], "visibility": "archive"}));
     }
 
     #[test]

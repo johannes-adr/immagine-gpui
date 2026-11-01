@@ -52,6 +52,10 @@ pub(super) enum Glyph {
     Check,
     /// The jobs list: arrow into a tray beside list lines.
     Jobs,
+    /// Three dots in a row ("..." menu).
+    More,
+    /// A box with a lid (archive).
+    Archive,
 }
 
 /// A `Glyph` of `size` px, stroked in `color`.
@@ -158,6 +162,16 @@ pub(super) fn glyph(kind: Glyph, size: f32, color: Rgba) -> Canvas<()> {
                     stroke(&[(8., 19.), (13., 19.)], window);
                     stroke(&[(18., 9.5), (18., 20.)], window);
                     stroke(&[(15., 17.), (18., 20.), (21., 17.)], window);
+                }
+                Glyph::More => {
+                    for cx_ in [5., 12., 19.] {
+                        fill(&circle(cx_, 12., 1.9), window);
+                    }
+                }
+                Glyph::Archive => {
+                    stroke(&[(3., 4.5), (21., 4.5), (21., 9.), (3., 9.), (3., 4.5)], window);
+                    stroke(&[(4.5, 9.), (4.5, 20.), (19.5, 20.), (19.5, 9.)], window);
+                    stroke(&[(9.5, 13.5), (14.5, 13.5)], window);
                 }
                 Glyph::Check => stroke(&[(5., 12.5), (10., 17.5), (19., 7.)], window),
                 Glyph::Trash => {

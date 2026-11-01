@@ -111,6 +111,9 @@ pub trait Store {
     fn apply_local_edit(&mut self, id: &str, width: i64, height: i64, edited: bool);
     fn set_favorite(&mut self, ids: &[String], favorite: bool);
     fn is_favorite(&self, id: &str) -> bool;
+    /// Sets `visibility` (`"archive"` / `"timeline"`) and the matching archived flag.
+    fn set_visibility(&mut self, ids: &[String], visibility: &str);
+    fn is_archived(&self, id: &str) -> bool;
     fn trash_assets(&mut self, ids: &[String]);
     fn untrash_assets(&mut self, ids: &[String]);
     /// Removes the assets and their album links. Album counts are not recounted (as in Swift).
@@ -664,6 +667,19 @@ impl Store for MemoryStore {
 
     fn is_favorite(&self, id: &str) -> bool {
         self.assets.get(id).is_some_and(|row| row.is_favorite)
+    }
+
+    fn set_visibility(&mut self, ids: &[String], visibility: &str) {
+        for id in ids {
+            if let Some(row) = self.assets.get_mut(id.as_str()) {
+                row.visibility = Some(visibility.to_string());
+                row.is_archived = visibility == "archive";
+            }
+        }
+    }
+
+    fn is_archived(&self, id: &str) -> bool {
+        self.assets.get(id).is_some_and(|row| row.visibility.as_deref() == Some("archive"))
     }
 
     fn trash_assets(&mut self, ids: &[String]) {
@@ -1438,6 +1454,8 @@ mod tests {
             }
             super::super::models::album_op::AlbumOpKind::Trash => store.trash_assets(&ids),
             super::super::models::album_op::AlbumOpKind::Restore => store.untrash_assets(&ids),
+            super::super::models::album_op::AlbumOpKind::Archive => store.set_visibility(&ids, "archive"),
+            super::super::models::album_op::AlbumOpKind::Unarchive => store.set_visibility(&ids, "timeline"),
             super::super::models::album_op::AlbumOpKind::Favorite => store.set_favorite(&ids, true),
             super::super::models::album_op::AlbumOpKind::Unfavorite => store.set_favorite(&ids, false),
         }

@@ -17,9 +17,8 @@ use crate::host::Pinch;
 use crate::logic::grid::hit::{autoscroll_speed, HitGeom};
 use crate::logic::grid::selection::SelectionPaint;
 use crate::logic::models::album_op::AlbumOp;
-use crate::logic::models::album_tree::AlbumPath;
 use crate::logic::models::timeline::TimelineItem;
-use crate::theme::{Palette, BLUE, RED};
+use crate::theme::{Palette, RED};
 use crate::util::now_ms;
 use gpui_kit::*;
 use std::cell::{Cell, RefCell};
@@ -56,9 +55,8 @@ pub(super) struct SelectState {
     painting: Option<Painting>,
     swallow_click: bool,
     last_tick: f64,
-    /// Delete confirmation and album picker overlays.
+    /// Delete confirmation overlay (the album picker is a sheet, see `album_picker`).
     confirm: bool,
-    picker: bool,
 }
 
 impl SelectState {
@@ -68,7 +66,7 @@ impl SelectState {
 
     /// An overlay covers the page: gestures belong to it.
     pub(super) fn overlay_open(&self) -> bool {
-        self.confirm || self.picker
+        self.confirm
     }
 
     pub(super) fn count(&self) -> usize {
@@ -380,26 +378,6 @@ impl Immagine {
         cx.notify();
     }
 
-    fn sel_add_to_album(&mut self, album: &str, cx: &mut Context<Self>) {
-        let ids: Vec<String> = self.select.ids.borrow().iter().cloned().collect();
-        self.select.picker = false;
-        if ids.is_empty() {
-            return;
-        }
-        let Some(engine) = self.engine.as_mut() else {
-            self.status = "Bitte kurz warten, es wird synchronisiert.".into();
-            cx.notify();
-            return;
-        };
-        engine.enqueue(&[AlbumOp::add(ids, album)]);
-        if let Some(e) = &self.engine {
-            self.albums.refresh(e.store());
-        }
-        self.select_end();
-        self.sync(cx);
-        cx.notify();
-    }
-
     // MARK: - Views
 
     /// "Auswählen" / "Abbrechen" at the top right of the Mediathek header.
@@ -440,8 +418,8 @@ impl Immagine {
         }
         if enabled {
             add = add.active(|s| s.opacity(0.6)).on_click(cx.listener(|this, _, _, cx| {
-                this.select.picker = true;
-                cx.notify();
+                let ids: Vec<String> = this.select.ids.borrow().iter().cloned().collect();
+                this.open_album_picker(ids, true, cx);
             }));
             trash = trash.active(|s| s.opacity(0.6)).on_click(cx.listener(|this, _, _, cx| {
                 this.select.confirm = true;
@@ -485,21 +463,14 @@ impl Immagine {
             .into_any_element()
     }
 
-    /// Delete confirmation and album picker, whichever is open.
-    pub(super) fn sel_overlay(&self, p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.select.confirm {
-            Some(self.sel_confirm(cx))
-        } else if self.select.picker {
-            Some(self.sel_picker(p, cx))
-        } else {
-            None
-        }
+    /// The delete confirmation, while it is open.
+    pub(super) fn sel_overlay(&self, _p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.select.confirm.then(|| self.sel_confirm(cx))
     }
 
     fn sel_scrim(&self, id: &'static str, cx: &mut Context<Self>) -> Stateful<Div> {
         div().id(id).absolute().top_0().left_0().size_full().occlude().bg(rgba(0x00000059)).on_click(cx.listener(|this, _, _, cx| {
             this.select.confirm = false;
-            this.select.picker = false;
             cx.notify();
         }))
     }
@@ -531,66 +502,6 @@ impl Immagine {
                 })),
             );
         div().absolute().top_0().left_0().size_full().child(self.sel_scrim("sel-confirm-scrim", cx)).child(card).into_any_element()
-    }
-
-    fn sel_picker(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
-        let bg = if self.dark { rgb(0x1c1c1e) } else { rgb(0xf2f2f7) };
-        let row_bg = if self.dark { rgb(0x2c2c2e) } else { rgb(0xffffff) };
-        let mut list = div().id("sel-albums").flex_1().overflow_y_scroll().flex().flex_col().gap(px(1.)).px(px(16.)).pb(px(self.bottom.max(10.) + 16.));
-        if self.albums.albums.is_empty() {
-            list = list.child(div().py_4().text_size(px(15.)).text_color(p.secondary).child("Keine Alben vorhanden."));
-        }
-        for (i, album) in self.albums.albums.iter().enumerate() {
-            let id = album.id.clone();
-            list = list.child(
-                div()
-                    .id(("sel-album-row", i))
-                    .h(px(52.))
-                    .px(px(16.))
-                    .bg(row_bg)
-                    .flex()
-                    .items_center()
-                    .text_size(px(17.))
-                    .text_color(p.label)
-                    .active(|s| s.opacity(0.6))
-                    .child(AlbumPath::leaf_of_album_name(&album.album_name))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if !window.tap_caught_fling() {
-                            this.sel_add_to_album(&id, cx)
-                        }
-                    })),
-            );
-        }
-        let panel = div()
-            .id("sel-picker")
-            .occlude()
-            .absolute()
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .h(relative(0.6))
-            .rounded_t(px(28.))
-            .bg(bg)
-            .overflow_hidden()
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .h(px(60.))
-                    .flex_none()
-                    .px(px(20.))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).text_color(p.label).child("Zum Album hinzufügen"))
-                    .child(div().id("sel-picker-close").text_size(px(17.)).text_color(rgb(BLUE)).active(|s| s.opacity(0.6)).child("Abbrechen").on_click(cx.listener(|this, _, _, cx| {
-                        this.select.picker = false;
-                        cx.notify();
-                    }))),
-            )
-            .child(list);
-        div().absolute().top_0().left_0().size_full().child(self.sel_scrim("sel-picker-scrim", cx)).child(panel).into_any_element()
     }
 }
 

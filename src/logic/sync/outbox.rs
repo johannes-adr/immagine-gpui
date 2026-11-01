@@ -41,6 +41,8 @@ pub fn apply<S: Store>(op: &AlbumOp, store: &mut S) {
             store.untrash_assets(&op.asset_ids);
             store.include_local_assets(&op.asset_ids);
         }
+        AlbumOpKind::Archive => store.set_visibility(&op.asset_ids, "archive"),
+        AlbumOpKind::Unarchive => store.set_visibility(&op.asset_ids, "timeline"),
         AlbumOpKind::Favorite => store.set_favorite(&op.asset_ids, true),
         AlbumOpKind::Unfavorite => store.set_favorite(&op.asset_ids, false),
     }
@@ -92,6 +94,8 @@ async fn send<T: HttpTransport>(op: &AlbumOp, client: &ImmichClient<T>, token: &
         AlbumOpKind::Remove => client.remove_assets(&op.asset_ids, album, token).await.map(|_| ()),
         AlbumOpKind::Trash => client.delete_assets(&op.asset_ids, token).await,
         AlbumOpKind::Restore => client.restore_assets(&op.asset_ids, token).await,
+        AlbumOpKind::Archive => client.set_visibility(&op.asset_ids, "archive", token).await,
+        AlbumOpKind::Unarchive => client.set_visibility(&op.asset_ids, "timeline", token).await,
         AlbumOpKind::Favorite => client.set_favorite(&op.asset_ids, true, token).await,
         AlbumOpKind::Unfavorite => client.set_favorite(&op.asset_ids, false, token).await,
     }
@@ -222,6 +226,31 @@ mod tests {
         assert!(AlbumOpKind::Favorite.affects_assets_only());
         assert!(!AlbumOpKind::Add.affects_assets_only());
         assert_eq!(AlbumOp::favorite(ids(&["a"])).inverse(), AlbumOp::unfavorite(ids(&["a"])));
+    }
+
+    #[test]
+    fn archive_leaves_the_timeline_at_once_and_unarchive_brings_it_back() {
+        let mut store = MemoryStore::new();
+        store.upsert_sync_assets(&[sync_asset("x")]);
+        enqueue(&mut store, &[AlbumOp::archive(ids(&["x"]))], 1.0);
+        assert!(store.is_archived("x"));
+        assert!(store.fetch_timeline().is_empty());
+        assert_eq!(store.pending_album_ops().iter().map(|op| op.kind).collect::<Vec<_>>(), [AlbumOpKind::Archive]);
+        apply(&AlbumOp::archive(ids(&["x"])).inverse(), &mut store);
+        assert!(!store.is_archived("x"));
+        assert_eq!(store.fetch_timeline().len(), 1);
+    }
+
+    #[test]
+    fn flush_sends_archive_as_visibility() {
+        let mock = Rc::new(MockTransport::new());
+        mock.push(no_content());
+        let client = ImmichClient::new(BASE, Rc::clone(&mock)).unwrap();
+        let mut store = MemoryStore::new();
+        store.enqueue_album_op(&AlbumOp::archive(ids(&["a"])), 1.0);
+        let report = block_on(flush(&mut store, &client, TOKEN));
+        assert_eq!(report.sent, 1);
+        assert_eq!(mock.requests.borrow()[0].path, "/api/assets");
     }
 
     /// Ops without an album are only queued when they are asset-only (Swift `enqueue` filter).
