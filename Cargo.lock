@@ -2654,6 +2654,7 @@ checksum = "e0f9dae92b9bc15baa6e530c90bdd4c689d3710bd4d18c3566deb1d6ae182daf"
 name = "gpui-web-demo"
 version = "0.1.0"
 dependencies = [
+ "block2 0.6.2",
  "futures-channel",
  "futures-lite",
  "gpui-kit",
@@ -2662,6 +2663,10 @@ dependencies = [
  "image",
  "js-sys",
  "mp4",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "objc2-ui-kit",
  "serde",
  "serde_json",
  "ureq",

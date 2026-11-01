@@ -40,6 +40,16 @@ futures-channel = "0.3"
 # gpui-kit leaves its platform re-export out on iOS, so the native iOS backend (UIKit + the patched Metal renderer) comes in directly.
 [target.'cfg(target_os = "ios")'.dependencies]
 gpui_platform = { package = "gpui-pre-platform", version = "0.3.10" }
+# Share sheet (src/host/desktop/share.rs); same versions and objc2 as gpui-pre-ios, so no second copy is built.
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSArray", "NSError", "NSGeometry", "NSObject", "NSSet", "NSString", "NSURL"] }
+objc2-ui-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "UIActivity", "UIActivityViewController", "UIApplication", "UIPopoverSupport", "UIGeometry", "UIPopoverPresentationController", "UIPresentationController", "UIResponder", "UIScene", "UIView", "UIViewController", "UIWindow", "UIWindowScene"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry", "NSObject", "NSArray", "NSURL", "NSString"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSSharingService", "NSView", "NSWindow"] }
 
 [[bin]]
 name = "immagine-desktop"
