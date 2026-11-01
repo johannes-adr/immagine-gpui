@@ -3,6 +3,7 @@
 //! Sync runs off a `SyncEngine` that is moved into the sync task and handed back when it ends, so the
 //! UI never borrows the store while it is being written. The UI reads a copy of the timeline.
 
+mod album_picker;
 mod albums;
 mod downloads;
 mod login;
@@ -141,6 +142,7 @@ pub(crate) struct Immagine {
     search: search::SearchState,
     settings: settings::SettingsState,
     jobs: jobs::JobsState,
+    picker: album_picker::PickerState,
     downloads: downloads::Downloads,
     select: selection::SelectState,
 }
@@ -274,6 +276,7 @@ impl Immagine {
             search: Default::default(),
             settings: Default::default(),
             jobs: Default::default(),
+            picker: Default::default(),
             downloads,
             select: Default::default(),
         };
@@ -402,6 +405,7 @@ impl Immagine {
         self.select_end();
         self.settings.sheet.close();
         self.jobs.reset();
+        self.picker.sheet.close();
         self.tab = 0;
         self.screen = Screen::Login;
         self.downloads.ids.borrow_mut().clear();
@@ -492,7 +496,7 @@ impl Immagine {
     /// The scroll handle of whatever scrolls on screen now, for the rubber band; `None` while the viewer is open
     /// or on screens without a scroll view.
     fn active_scroll(&self) -> Option<ScrollHandle> {
-        if self.screen != Screen::Timeline || self.viewer.as_ref().is_some_and(|v| !v.closing) || self.settings.sheet.visible() || self.jobs.sheet.visible() {
+        if self.screen != Screen::Timeline || self.viewer.as_ref().is_some_and(|v| !v.closing) || self.settings.sheet.visible() || self.jobs.sheet.visible() || self.picker.sheet.visible() {
             return None;
         }
         let list = |h: &UniformListScrollHandle| h.0.borrow().base_handle.clone();
@@ -531,6 +535,8 @@ impl Render for Immagine {
         self.settings.rubber.tick(window);
         self.jobs.sheet.tick(window);
         self.jobs.rubber.tick(window);
+        self.picker.sheet.tick(window);
+        self.picker.rubber.tick(window);
         self.grid_default(window.viewport_size().width.into());
         self.grid_tick(window);
         self.select_check();
@@ -566,6 +572,7 @@ impl Render for Immagine {
         let select_overlay = if self.screen == Screen::Timeline && self.select.on { self.sel_overlay(&p, cx) } else { None };
         let settings = if self.screen == Screen::Timeline { self.settings_overlay(&p, window, cx) } else { None };
         let jobs = if self.screen == Screen::Timeline { self.jobs_overlay(&p, window, cx) } else { None };
+        let picker = if self.screen == Screen::Timeline { self.picker_overlay(&p, window, cx) } else { None };
         div()
             .size_full()
             .relative()
@@ -585,6 +592,9 @@ impl Render for Immagine {
                 if this.select.painting() {
                     window.cancel_touch_momentum();
                     return (true, false);
+                }
+                if this.picker.sheet.visible() {
+                    return this.picker_scroll_event(dy, phase, window);
                 }
                 if this.select.overlay_open() {
                     return (false, false);
@@ -608,6 +618,7 @@ impl Render for Immagine {
             .children(select_overlay)
             .children(settings)
             .children(jobs)
+            .children(picker)
             .children(self.debug.then(|| fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, H::renderer_name(self.webgpu))))
     }
 }
