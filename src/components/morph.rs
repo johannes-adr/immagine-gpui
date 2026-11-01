@@ -8,10 +8,15 @@
 //! The anchor can be anywhere (top right menu, bottom right confirmation): both rectangles are given in
 //! screen coordinates.
 
+use crate::components::button;
 use crate::components::glass::glass_div_with;
+use crate::components::scrim::scrim;
 use crate::components::ease::lerp;
 use gpui_kit::*;
 use std::time::Duration;
+
+/// Tint of a card that carries text (dark, nearly opaque).
+pub(crate) const DIALOG_TINT: Hsla = Hsla { h: 0., s: 0., l: 0.12, a: 0.94 };
 
 /// Length of the morph from the button to the card (and back).
 pub(crate) const MORPH_MS: f64 = 340.;
@@ -130,21 +135,39 @@ pub(crate) fn overlay<V: 'static>(
             .left_0()
             .size_full()
             .child(
-                div()
-                    .id((spec.id, 1usize))
+                scrim((spec.id, 1usize), 0.35 * t)
                     // Without it a tap also reaches the photo layer and toggles the viewer's controls.
                     .occlude()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full()
-                    .bg(rgba(0x000000ff))
-                    .opacity(0.35 * t)
                     .on_click(cx.listener(move |this, _, _, cx| on_scrim(this, cx))),
             )
             .child(card)
             .into_any_element(),
     )
+}
+
+/// Content of a confirmation card: `message` above one full-width destructive button. `on_confirm` is attached
+/// only when given (pass it while `Morph::is_open`, so a tap during the animation does nothing).
+pub(crate) fn confirm_content(
+    id: &'static str,
+    message: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    text: Rgba,
+    destructive: Rgba,
+    on_confirm: Option<impl Fn(&ClickEvent, &mut Window, &mut App) + 'static>,
+) -> AnyElement {
+    let mut confirm = button::filled(id, rgba(0xffffff1f), 54., 27., label).text_size(px(20.)).text_color(destructive);
+    if let Some(f) = on_confirm {
+        confirm = confirm.on_click(f);
+    }
+    div()
+        .size_full()
+        .p(px(20.))
+        .flex()
+        .flex_col()
+        .justify_between()
+        .child(div().text_size(px(17.)).text_color(text).child(message.into()))
+        .child(confirm)
+        .into_any_element()
 }
 
 #[cfg(test)]

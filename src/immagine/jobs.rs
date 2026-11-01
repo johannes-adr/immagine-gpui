@@ -7,7 +7,7 @@
 use super::downloads::{fetch_and_store, Fetched};
 use super::settings::size;
 use super::Immagine;
-use crate::components::glass::glass_div;
+use crate::components::button::{self, Surface};
 use crate::components::rubber_band::RubberBand;
 use crate::components::sheet::{self, Sheet};
 use crate::host::{Current as H, Host, Pinch};
@@ -249,14 +249,9 @@ impl Immagine {
     /// The round button beside the gear; a blue badge counts the unfinished jobs.
     pub(super) fn jobs_button(&self, p: &Palette, cx: &mut Context<Self>) -> Stateful<Div> {
         let active = self.jobs.active();
-        glass_div(p.glass_tint, 18.)
-            .id("albums-jobs")
+        button::circle("albums-jobs", Surface::new(p.glass_tint), 36.)
             .relative()
-            .size(px(36.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .active(|s| s.opacity(0.6))
+            .active(button::dim)
             .child(crate::components::icon::glyph(crate::components::icon::Glyph::Jobs, 20., p.label))
             .children((active > 0).then(|| {
                 div()

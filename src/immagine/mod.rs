@@ -580,7 +580,7 @@ impl Render for Immagine {
         });
         let scrollbar = if self.screen == Screen::Timeline { self.sb_layer(&p, cx) } else { None };
         let viewer = if self.screen == Screen::Timeline { self.viewer_overlay(window, cx) } else { None };
-        let select_overlay = if self.screen == Screen::Timeline && self.select.on { self.sel_overlay(&p, cx) } else { None };
+        let select_overlay = if self.screen == Screen::Timeline && self.select.on { self.sel_overlay(window, cx) } else { None };
         let settings = if self.screen == Screen::Timeline { self.settings_overlay(&p, window, cx) } else { None };
         let jobs = if self.screen == Screen::Timeline { self.jobs_overlay(&p, window, cx) } else { None };
         let picker = if self.screen == Screen::Timeline { self.picker_overlay(&p, window, cx) } else { None };

@@ -2,7 +2,6 @@
 //! in a color passed by the caller, so one set serves any theme. `glyph` draws the `Glyph` set on a 24-unit grid
 //! scaled to its size; the others are single shapes.
 
-use crate::components::glass::glass_div_faded;
 use gpui_kit::*;
 
 /// Direction of a `chevron`.
@@ -257,15 +256,4 @@ pub(crate) fn progress_ring(fraction: f32, size: f32, color: Rgba) -> Canvas<()>
         },
     )
     .size(px(size))
-}
-
-/// A round glass back button with a chevron.
-pub(crate) fn back_chip(tint: Hsla, id: &'static str, color: Rgba) -> Stateful<Div> {
-    back_chip_faded(tint, id, color, 1.)
-}
-
-/// `back_chip` shown at `k` (1 = full, 0 = invisible).
-pub(crate) fn back_chip_faded(tint: Hsla, id: &'static str, color: Rgba, k: f32) -> Stateful<Div> {
-    let color = Rgba { a: color.a * k, ..color };
-    glass_div_faded(tint, 18., k).id(id).h(px(36.)).w(px(48.)).flex().items_center().justify_center().active(|s| s.opacity(0.6)).child(chevron(Dir::Left, color))
 }

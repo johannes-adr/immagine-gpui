@@ -2,7 +2,7 @@
 //! Albums tab: album and folder tiles from the store, album page with its photos (`photo_grid`).
 
 use super::{thumbs, Immagine};
-use crate::components::glass::glass_div;
+use crate::components::button::{self, Surface};
 use crate::host::{Current as H, Host};
 use crate::logic::client::ImmichClient;
 use crate::logic::models::album::Album;
@@ -189,20 +189,6 @@ fn caption(p: &Palette, name: &str, detail: String) -> Div {
 /// caller's `on_click`.
 fn hidden_slot(i: usize, tile: f32) -> Stateful<Div> {
     div().id(("album-special", i)).w(px(tile)).h(px(tile))
-}
-
-/// Glass chip used for the back buttons.
-fn chip(p: &Palette, id: &'static str, label: String) -> Stateful<Div> {
-    glass_div(p.glass_tint, 18.)
-        .id(id)
-        .h(px(36.))
-        .px_4()
-        .flex()
-        .items_center()
-        .text_size(px(17.))
-        .text_color(rgb(BLUE))
-        .active(|s| s.opacity(0.6))
-        .child(label)
 }
 
 impl Immagine {
@@ -393,7 +379,7 @@ impl Immagine {
             Some(special) if open.items.is_empty() => special.empty().to_string(),
             _ => count_label(open.items.len(), "Foto", "Fotos"),
         };
-        let back = div().flex().flex_row().child(crate::components::icon::back_chip(p.glass_tint, "album-back", rgb(BLUE).into()).on_click(cx.listener(|this, _, _, cx| this.close_album(cx))));
+        let back = div().flex().flex_row().child(button::back("album-back", Surface::new(p.glass_tint), rgb(BLUE).into()).on_click(cx.listener(|this, _, _, cx| this.close_album(cx))));
         let header = div()
             .px(px(PAD))
             .pt(px(20.))
@@ -547,7 +533,7 @@ impl Immagine {
             let parent = AlbumPath::parent_of(&st.path);
             header = header.child(
                 div().flex().flex_row().child(
-                    crate::components::icon::back_chip(p.glass_tint, "albums-up", rgb(BLUE).into()).on_click(cx.listener(move |this, _, _, cx| this.go_to_folder(parent.clone(), cx))),
+                    button::back("albums-up", Surface::new(p.glass_tint), rgb(BLUE).into()).on_click(cx.listener(move |this, _, _, cx| this.go_to_folder(parent.clone(), cx))),
                 ),
             );
             let mut crumbs = div().flex().flex_row().flex_wrap().gap_1().text_size(px(15.)).text_color(p.secondary);
@@ -583,13 +569,8 @@ impl Immagine {
                     .child(div().flex_1().min_w_0().text_size(px(34.)).font_weight(FontWeight::BOLD).truncate().child(title))
                     .child(self.jobs_button(p, cx))
                     .child(
-                        glass_div(p.glass_tint, 18.)
-                            .id("albums-settings")
-                            .size(px(36.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .active(|s| s.opacity(0.6))
+                        button::circle("albums-settings", Surface::new(p.glass_tint), 36.)
+                            .active(button::dim)
                             .child(crate::components::icon::glyph(crate::components::icon::Glyph::Gear, 20., p.label))
                             .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
                     ),

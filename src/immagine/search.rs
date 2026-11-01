@@ -7,7 +7,7 @@
 use crate::components::icon::{glyph, Glyph};
 use super::people::Load;
 use super::Immagine;
-use crate::components::glass::glass_div;
+use crate::components::button::{self, Surface};
 use crate::host::{Current as H, Host};
 use crate::logic::client::{ClientError, ImmichClient};
 use crate::logic::models::timeline::TimelineItem;
@@ -188,17 +188,11 @@ impl Immagine {
 
         // Glass pills like the suggestion buttons of Apple's search; the selected one is blue.
         let chip = |id: &'static str, label: &'static str, on: bool| {
-            glass_div(p.glass_tint, 18.)
-                .id(id)
-                .h(px(40.))
-                .px_4()
-                .flex()
-                .items_center()
+            button::chip(id, Surface::new(p.glass_tint), 40., 16., label)
                 .text_size(px(16.))
                 .font_weight(if on { FontWeight::BOLD } else { FontWeight::MEDIUM })
                 .text_color(if on { rgb(BLUE).into() } else { p.label })
-                .active(|s| s.opacity(0.6))
-                .child(label)
+                .active(button::dim)
         };
         let mode_chip = |id: &'static str, label: &'static str, mode: Mode| {
             chip(id, label, s.mode == mode).on_click(cx.listener(move |this, _, _, cx| {
@@ -246,27 +240,16 @@ impl Immagine {
         let bottom = if keyboard > 0. { keyboard + 8. } else { self.bottom.max(10.) };
 
         let field = self.search.input.as_ref().map(|input| {
-            glass_div(p.glass_tint, H / 2.)
-                .id("search-field")
-                .h(px(H))
+            button::pill("search-field", Surface::new(p.glass_tint), H)
                 .flex_1()
                 .px_4()
-                .flex()
-                .flex_row()
-                .items_center()
                 .gap_2()
                 .on_click(cx.listener(|this, _, window, cx| this.focus_search(window, cx)))
                 .child(glyph(Glyph::Search, 22., p.secondary))
                 .child(div().flex_1().child(Input::new(input).appearance(false).bordered(false).cleanable(false)))
         });
-        let close = glass_div(p.glass_tint, H / 2.)
-            .id("search-close")
-            .size(px(H))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .active(|s| s.opacity(0.6))
+        let close = button::circle("search-close", Surface::new(p.glass_tint), H)
+            .active(button::dim)
             .on_click(cx.listener(|this, _, window, cx| {
                 window.dismiss_virtual_keyboard();
                 this.close_search(cx);

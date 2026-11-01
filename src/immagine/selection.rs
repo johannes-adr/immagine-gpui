@@ -12,7 +12,8 @@
 
 use crate::components::icon::{glyph, Glyph};
 use super::{Immagine, Screen};
-use crate::components::glass::{glass_div_faded, glass_div_with};
+use crate::components::button::{self, Surface};
+use crate::components::morph::{self, Morph};
 use crate::host::Pinch;
 use crate::logic::grid::hit::{autoscroll_speed, HitGeom};
 use crate::logic::grid::selection::SelectionPaint;
@@ -29,6 +30,8 @@ use std::rc::Rc;
 const DRAG_SLOP: f32 = 5.;
 /// Width of the header button's corner, where a press does not start a selection.
 const BUTTON_ZONE: f32 = 150.;
+/// The toolbar's round buttons.
+const TRASH: f32 = 52.;
 
 struct Press {
     start: (f32, f32),
@@ -55,8 +58,8 @@ pub(super) struct SelectState {
     painting: Option<Painting>,
     swallow_click: bool,
     last_tick: f64,
-    /// Delete confirmation overlay (the album picker is a sheet, see `album_picker`).
-    confirm: bool,
+    /// Delete confirmation, morphing out of the toolbar's trash button (the album picker is a sheet, see `album_picker`).
+    pub(super) delete: Morph,
 }
 
 impl SelectState {
@@ -66,7 +69,7 @@ impl SelectState {
 
     /// An overlay covers the page: gestures belong to it.
     pub(super) fn overlay_open(&self) -> bool {
-        self.confirm
+        self.delete.active()
     }
 
     pub(super) fn count(&self) -> usize {
@@ -361,7 +364,7 @@ impl Immagine {
 
     fn sel_delete(&mut self, cx: &mut Context<Self>) {
         let ids: Vec<String> = self.select.ids.borrow().iter().cloned().collect();
-        self.select.confirm = false;
+        self.select.delete.reset();
         if ids.is_empty() {
             return;
         }
@@ -383,18 +386,12 @@ impl Immagine {
     /// "Auswählen" / "Abbrechen" at the top right of the Mediathek header.
     pub(super) fn sel_header_button(&self, p: &Palette, cx: &mut Context<Self>) -> Stateful<Div> {
         let on = self.select.on;
-        glass_div_faded(p.bar_tint, 18., 1.)
-            .id("sel-toggle")
+        button::chip("sel-toggle", Surface::new(p.bar_tint), 36., 14., if on { "Abbrechen" } else { "Auswählen" })
             .occlude()
-            .h(px(36.))
-            .px(px(14.))
-            .flex()
-            .items_center()
-            .active(|s| s.opacity(0.6))
+            .active(button::dim)
             .text_size(px(15.))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(p.label)
-            .child(if on { "Abbrechen" } else { "Auswählen" })
             .on_click(cx.listener(move |this, _, _, cx| if on { this.select_cancel(cx) } else { this.select_begin(cx) }))
     }
 
@@ -404,7 +401,7 @@ impl Immagine {
         let bottom = self.bottom.max(10.);
         let enabled = count > 0;
         let icon_color = Rgba { a: p.label.a * if enabled { 1. } else { 0.3 }, ..p.label };
-        let round = |id: &'static str, g: Glyph, color: Rgba| glass_div_faded(p.bar_tint, 26., 1.).id(id).size(px(52.)).flex_none().flex().items_center().justify_center().child(glyph(g, 24., color));
+        let round = |id: &'static str, g: Glyph, color: Rgba| button::circle(id, Surface::new(p.bar_tint), TRASH).child(glyph(g, 24., color));
         let mut add = round("sel-album", Glyph::AddToAlbum, icon_color);
         let mut trash = round("sel-trash", Glyph::Trash, if enabled { rgb(RED).into() } else { icon_color });
         // Downloads whatever of the selection is not stored yet, as a job (see the jobs sheet).
@@ -414,17 +411,14 @@ impl Immagine {
         };
         let mut download = round("sel-download", Glyph::Download, if missing > 0 { p.label } else { icon_color });
         if missing > 0 {
-            download = download.active(|s| s.opacity(0.6)).on_click(cx.listener(|this, _, _, cx| this.sel_download(cx)));
+            download = download.active(button::dim).on_click(cx.listener(|this, _, _, cx| this.sel_download(cx)));
         }
         if enabled {
-            add = add.active(|s| s.opacity(0.6)).on_click(cx.listener(|this, _, _, cx| {
+            add = add.active(button::dim).on_click(cx.listener(|this, _, _, cx| {
                 let ids: Vec<String> = this.select.ids.borrow().iter().cloned().collect();
                 this.open_album_picker(ids, true, cx);
             }));
-            trash = trash.active(|s| s.opacity(0.6)).on_click(cx.listener(|this, _, _, cx| {
-                this.select.confirm = true;
-                cx.notify();
-            }));
+            trash = trash.active(button::dim).on_click(cx.listener(|this, _, _, cx| this.open_sel_delete(cx)));
         }
         div()
             .id("selbar")
@@ -446,62 +440,64 @@ impl Immagine {
                     .justify_between()
                     .child(div().flex().flex_row().gap_2().child(add).child(download))
                     .child(
-                        glass_div_faded(p.bar_tint, 26., 1.)
-                            .h(px(52.))
+                        button::pill("sel-count", Surface::new(p.bar_tint), 52.)
                             .px(px(14.))
                             .mx_2()
                             .min_w_0()
-                            .flex()
-                            .items_center()
+                            .justify_start()
                             .text_size(px(14.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(p.label)
                             .child(title(count)),
                     )
-                    .child(trash),
+                    // While the confirmation morphs out of the trash button, the button itself is gone.
+                    .child(if self.select.delete.active() { div().size(px(TRASH)).flex_none().into_any_element() } else { trash.into_any_element() }),
             )
             .into_any_element()
     }
 
-    /// The delete confirmation, while it is open.
-    pub(super) fn sel_overlay(&self, _p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
-        self.select.confirm.then(|| self.sel_confirm(cx))
-    }
-
-    fn sel_scrim(&self, id: &'static str, cx: &mut Context<Self>) -> Stateful<Div> {
-        div().id(id).absolute().top_0().left_0().size_full().occlude().bg(rgba(0x00000059)).on_click(cx.listener(|this, _, _, cx| {
-            this.select.confirm = false;
+    fn open_sel_delete(&mut self, cx: &mut Context<Self>) {
+        if self.select.delete.open(now_ms()) {
             cx.notify();
-        }))
+        }
     }
 
-    fn sel_confirm(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn close_sel_delete(&mut self, cx: &mut Context<Self>) {
+        if self.select.delete.close(now_ms()) {
+            cx.notify();
+            Morph::finish_after(cx, |t: &mut Self| Some(&mut t.select.delete));
+        }
+    }
+
+    /// The delete confirmation, from the toolbar's trash button (bottom right) to a card above it.
+    pub(super) fn sel_overlay(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let m = self.select.delete;
+        if !m.active() {
+            return None;
+        }
         let n = self.select.count();
         let label = if n == 1 { "Objekt löschen".to_string() } else { format!("{n} Objekte löschen") };
+        let size = window.viewport_size();
+        let (vw, vh): (f32, f32) = (size.width.into(), size.height.into());
         let bottom = self.bottom.max(10.);
-        let button = |id: &'static str, text: String, color: Rgba| {
-            div().id(id).h(px(54.)).rounded(px(27.)).bg(rgba(0xffffff1f)).flex().items_center().justify_center().text_size(px(20.)).text_color(color).active(|s| s.opacity(0.6)).child(text)
+        let (bw, bh) = (292., 200.);
+        let content = morph::confirm_content(
+            "sel-confirm-delete",
+            "Gelöschte Objekte liegen 30 Tage im Papierkorb deines Immich-Servers.",
+            label,
+            rgb(0xffffff).into(),
+            rgb(0xff5a52).into(),
+            m.is_open().then(|| cx.listener(|this, _, _, cx| this.sel_delete(cx))),
+        );
+        let spec = morph::Spec {
+            id: "sel-confirm",
+            anchor: (vw - 20. - TRASH, vh - (bottom + 4.) - TRASH, TRASH, TRASH),
+            card: (vw - 16. - bw, vh - bottom - bh, bw, bh),
+            tint: morph::DIALOG_TINT,
+            anchor_radius: TRASH / 2.,
+            card_radius: 34.,
         };
-        let card = glass_div_with(Hsla { h: 0., s: 0., l: 0.12, a: 0.94 }, 34., 1., true)
-            .id("sel-confirm")
-            .occlude()
-            .absolute()
-            .left(px(16.))
-            .right(px(16.))
-            .bottom(px(bottom + 10.))
-            .p(px(20.))
-            .flex()
-            .flex_col()
-            .gap(px(14.))
-            .child(div().text_size(px(17.)).text_color(rgb(0xffffff)).child("Gelöschte Objekte liegen 30 Tage im Papierkorb deines Immich-Servers."))
-            .child(button("sel-confirm-delete", label, rgb(0xff5a52).into()).on_click(cx.listener(|this, _, _, cx| this.sel_delete(cx))))
-            .child(
-                button("sel-confirm-cancel", "Abbrechen".into(), rgb(0xffffff).into()).on_click(cx.listener(|this, _, _, cx| {
-                    this.select.confirm = false;
-                    cx.notify();
-                })),
-            );
-        div().absolute().top_0().left_0().size_full().child(self.sel_scrim("sel-confirm-scrim", cx)).child(card).into_any_element()
+        morph::overlay(m, spec, now_ms(), window, content, |this: &mut Self, cx| this.close_sel_delete(cx), cx)
     }
 }
 

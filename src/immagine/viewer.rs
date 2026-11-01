@@ -4,6 +4,7 @@
 //! stand-in until the larger preview arrives, and the full-size rendition once zoomed in.
 
 use super::{thumbs, Immagine};
+use crate::components::button::{self, Surface};
 use crate::components::glass::glass_div_with;
 use crate::components::morph::{self, Morph};
 use crate::logic::client::ImmichClient;
@@ -48,8 +49,6 @@ const TAP_SLOP: f32 = 8.;
 const CHROME_MS: f64 = 180.;
 /// Dark grey of the viewer's glass buttons, over the viewer's black background.
 const VIEWER_TINT: Hsla = Hsla { h: 0., s: 0., l: 0.28, a: 0.62 };
-/// Darker tint of the delete confirmation, which is bigger and carries text.
-const DIALOG_TINT: Hsla = Hsla { h: 0., s: 0., l: 0.12, a: 0.94 };
 const DIALOG_SIZE: (f32, f32) = (292., 268.);
 /// The "..." menu: width and height of one row.
 const MENU_WIDTH: f32 = 262.;
@@ -163,7 +162,12 @@ fn dismiss_scale(dy: f32, vh: f32) -> f32 {
 /// A glass button of the viewer. It occludes, otherwise a click on it also reaches the photo layer underneath and
 /// toggles the controls (info pill, share, trash).
 pub(crate) fn glass_button(id: &'static str, w: f32, k: f32) -> Stateful<Div> {
-    glass_div_with(VIEWER_TINT, 24., k, true).id(id).occlude().h(px(48.)).w(px(w)).flex().items_center().justify_center()
+    button::pill(id, surface(k), 48.).w(px(w)).occlude()
+}
+
+/// The dark glass of the viewer's controls, faded to `k`; it sits on the photo, so it samples the fresh frame.
+fn surface(k: f32) -> Surface {
+    Surface::new(VIEWER_TINT).faded(k).fresh()
 }
 
 /// How visible the viewer's controls are (1 = full) while the photo is dragged down at scale `ds`: gone shortly
@@ -763,7 +767,7 @@ impl Immagine {
             id: "viewer-menu",
             anchor: (vw - 16. - 44., top + 2., 44., 44.),
             card: (vw - 16. - cw, top + 2., cw, ch),
-            tint: DIALOG_TINT,
+            tint: morph::DIALOG_TINT,
             anchor_radius: 22.,
             card_radius: 26.,
         };
@@ -1061,7 +1065,7 @@ impl Immagine {
     fn video_controls(&self, player: &Rc<RefCell<Player>>, track: Rc<Cell<(f32, f32, f32, f32)>>, k: f32, bottom: f32, live: bool, cx: &mut Context<Self>) -> AnyElement {
         let white = Rgba { a: k, ..rgb(0xffffff).into() };
         let p = player.borrow();
-        let pill = glass_div_with(VIEWER_TINT, 26., k, true).id("viewer-controls").occlude().h(px(52.)).px_4().flex().flex_row().items_center().gap_3().text_color(white).text_size(px(13.));
+        let pill = button::pill("viewer-controls", surface(k), 52.).occlude().px_4().gap_3().text_color(white).text_size(px(13.));
         let body = match &p.status {
             Status::Loading => pill.justify_center().child("Lädt …"),
             Status::Failed(message) => pill.justify_center().child(message.clone()),
@@ -1162,7 +1166,7 @@ impl Immagine {
             layer = layer.child(rect(hx, y - 1.5, 22., 3., 0xffffffff)).child(rect(x - 1.5, vy, 3., 22., 0xffffffff));
         }
         let chip = |id: &'static str, label: &str, color: Rgba| {
-            glass_div_with(VIEWER_TINT, 22., 1., true).id(id).h(px(44.)).px_5().flex().items_center().text_color(color).text_size(px(17.)).child(label.to_string())
+            button::chip(id, surface(1.), 44., 20., label.to_string()).text_color(color).text_size(px(17.))
         };
         let ready = ed.pixels.is_some() && !ed.saving;
         let cancel = chip("editor-cancel", "Abbrechen", rgb(0xffffff).into()).on_click(cx.listener(|this, _, _, cx| this.close_editor(cx)));
@@ -1190,7 +1194,7 @@ impl Immagine {
             div()
                 .id(("editor-aspect", i))
                 .flex_none()
-                .child(glass_div_with(VIEWER_TINT, 20., 1., true).h(px(40.)).px_4().flex().items_center().text_color(color).text_size(px(15.)).child(a.title()))
+                .child(button::chip(("editor-aspect-chip", i), surface(1.), 40., 16., a.title()).text_color(color).text_size(px(15.)))
                 .on_click(cx.listener(move |this, _, _, cx| this.set_aspect(a, cx)))
         });
         layer
@@ -1317,16 +1321,7 @@ impl Immagine {
 
         let chip = |id: &'static str, label: String, color: Rgba| {
             let color = Rgba { a: color.a * k, ..color };
-            glass_div_with(VIEWER_TINT, 22., k, true)
-                .id(id)
-                .occlude()
-                .h(px(44.))
-                .px_5()
-                .flex()
-                .items_center()
-                .text_color(color)
-                .text_size(px(17.))
-                .child(label)
+            button::chip(id, surface(k), 44., 20., label).occlude().text_color(color).text_size(px(17.))
         };
         // Round or pill-shaped dark glass button of the top and bottom bars.
         let button = |id: &'static str, w: f32| glass_button(id, w, k);
@@ -1428,35 +1423,20 @@ impl Immagine {
             let (bw, bh) = DIALOG_SIZE;
             let open = v.trash.is_open();
             let noun = if is_video { "Video" } else { "Foto" };
-            let mut confirm = div()
-                .id("viewer-dialog-confirm")
-                .h(px(54.))
-                .rounded(px(27.))
-                .bg(rgba(0xffffff1f))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(20.))
-                .text_color(rgb(0xff5a52))
-                .child(format!("{noun} löschen"));
-            if open {
-                confirm = confirm.on_click(cx.listener(|this, _, _, cx| this.trash_current(cx)));
-            }
-            let content = div()
-                .size_full()
-                .p(px(20.))
-                .flex()
-                .flex_col()
-                .justify_between()
-                .child(div().text_size(px(17.)).text_color(rgb(0xffffff)).child(format!("Dieses {noun} wird aus der Mediathek gelöscht. Du kannst noch 30 Tage in „Zuletzt gelöscht“ darauf zugreifen.")))
-                .child(confirm)
-                .into_any_element();
+            let content = morph::confirm_content(
+                "viewer-dialog-confirm",
+                format!("Dieses {noun} wird aus der Mediathek gelöscht. Du kannst noch 30 Tage in „Zuletzt gelöscht“ darauf zugreifen."),
+                format!("{noun} löschen"),
+                rgb(0xffffff).into(),
+                rgb(0xff5a52).into(),
+                open.then(|| cx.listener(|this, _, _, cx| this.trash_current(cx))),
+            );
             // From the trash button (48 pt, bottom right) to the confirmation box.
             let spec = morph::Spec {
                 id: "viewer-dialog",
                 anchor: (vw - 24. - 48., vh - bottom - 48., 48., 48.),
                 card: (vw - 16. - bw, vh - bottom - bh, bw, bh),
-                tint: DIALOG_TINT,
+                tint: morph::DIALOG_TINT,
                 anchor_radius: 24.,
                 card_radius: 34.,
             };
@@ -1642,13 +1622,9 @@ impl Immagine {
                     if live {
                         back = back.on_click(cx.listener(|this, _, _, cx| this.close_viewer(cx)));
                     }
-                    let title = glass_div_with(VIEWER_TINT, 22., k, true)
+                    let title = button::pill("viewer-title", surface(k), 44.)
                         .w(px(160.))
-                        .h(px(44.))
-                        .flex()
                         .flex_col()
-                        .items_center()
-                        .justify_center()
                         .text_color(white)
                         .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(day))
                         .child(div().text_size(px(14.)).child(time));

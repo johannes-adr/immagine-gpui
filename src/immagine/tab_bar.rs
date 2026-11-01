@@ -1,4 +1,5 @@
 use super::{Immagine, Screen};
+use crate::components::button::{self, Surface};
 use crate::components::glass::glass_div_faded;
 use crate::theme::{Palette, BLUE};
 use crate::components::ease::{anim, lerp};
@@ -237,7 +238,7 @@ impl Immagine {
                 .text_color(label)
                 .child(RANGES[ix])
         };
-        let round = |id: &'static str| glass_div_faded(p.bar_tint, H / 2., k).id(id).size(px(H)).flex_none().flex().items_center().justify_center();
+        let round = |id: &'static str| button::circle(id, Surface::new(p.bar_tint).faded(k), H);
         let hole: Rgba = if self.dark { rgb(0x000000).into() } else { rgb(0xffffff).into() };
         div()
             .id("rangebar")
@@ -281,7 +282,7 @@ impl Immagine {
                     )
                     .child(
                         round("range-search")
-                            .active(|s| s.opacity(0.6))
+                            .active(button::dim)
                             .on_click(cx.listener(|this, _, window, cx| this.open_search(window, cx)))
                             .child(glyph(Glyph::Search, 26., label)),
                     ),
