@@ -43,6 +43,8 @@ fn card(
         Some(w) => base.w(px(w)),
         None => base.w_full(),
     };
+    #[cfg(test)]
+    let base = base.debug_selector(|| format!("card-{}", item.id));
     base.children(picture.map(|image| img(image).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Cover)))
         .child(div().absolute().top_0().left_0().w_full().h(px(label_size * 3.)).bg(linear_gradient(
             180.,
@@ -121,7 +123,9 @@ impl Immagine {
             });
             let big = cards.next();
             let heading = format!("{} {}", MONTHS[(month.month - 1) as usize], month.year);
+            // `w_full`: without it the row is as wide as its content and the big card's `w_full` resolves to 0.
             div()
+                .w_full()
                 .h(px(row_h))
                 .px(px(SIDE))
                 .flex()
@@ -197,5 +201,34 @@ impl Immagine {
         self.timeline_jump.set(Some(index));
         self.scroll_settle.set(crate::util::now_ms());
         self.select_range(2, cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ::gpui::TestAppContext;
+
+    fn it(id: &str, date: &str) -> TimelineItem {
+        TimelineItem { id: id.into(), asset_type: "IMAGE".into(), thumbhash: None, ratio: Some(1.), is_favorite: false, is_trashed: false, date_bucket: date.into(), sort_date: None, duration: None }
+    }
+
+    #[::core::prelude::v1::test]
+    fn month_row_cards_have_size() {
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|w, cx| Immagine::new(0., 0., false, false, w, cx));
+        view.update(cx, |app, cx| {
+            app.screen = super::super::Screen::Timeline;
+            app.range_mode = 1;
+            app.items = Rc::new(vec![it("a", "2026-09-09"), it("b", "2026-09-13"), it("b2", "2026-09-13"), it("c", "2026-09-15")]);
+            cx.notify();
+        });
+        cx.update(|w, _| w.refresh());
+        let vw: f32 = cx.update(|w, _| w.viewport_size().width.into());
+        // The busiest day ("b") gets the big card: it must span the row, not collapse to the width of its (absolute) content.
+        let big = cx.debug_bounds("card-b").expect("big card painted");
+        assert_eq!(f32::from(big.size.width), vw - 2. * SIDE);
+        let small = cx.debug_bounds("card-a").expect("small card painted");
+        assert!(f32::from(small.size.width) > 0.);
     }
 }
