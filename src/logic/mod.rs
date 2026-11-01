@@ -18,7 +18,6 @@ pub mod movie;
 pub mod ports;
 pub mod range_groups;
 pub mod rendition_cache;
-pub mod rubber_band;
 pub mod store;
 pub mod sync;
 pub mod thumbhash;
