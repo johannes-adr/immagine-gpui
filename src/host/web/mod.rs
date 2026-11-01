@@ -153,17 +153,23 @@ impl Host for Web {
         image_loader::fetch(url, cancel).await
     }
 
-    async fn share_file(name: &str, mime: &str, bytes: Vec<u8>) -> Result<(), String> {
+    async fn share_files(files: Vec<crate::host::ShareFile>) -> Result<(), String> {
+        let make = js_sys::Function::new_with_args("name,mime,bytes", "return new File([bytes],name,{type:mime});");
+        let list = js_sys::Array::new();
+        for f in &files {
+            let array = js_sys::Uint8Array::from(f.bytes.as_slice());
+            let file = make
+                .call3(&wasm_bindgen::JsValue::NULL, &f.name.as_str().into(), &f.mime.into(), &array)
+                .map_err(|e| format!("{e:?}"))?;
+            list.push(&file);
+        }
+        drop(files);
         let share = js_sys::Function::new_with_args(
-            "name,mime,bytes",
+            "files",
             "if(!navigator.share)return Promise.reject('Teilen wird hier nicht unterstützt');\
-             const f=new File([bytes],name,{type:mime});\
-             return navigator.share({files:[f]});",
+             return navigator.share({files});",
         );
-        let array = js_sys::Uint8Array::from(bytes.as_slice());
-        let promise = share
-            .call3(&wasm_bindgen::JsValue::NULL, &name.into(), &mime.into(), &array)
-            .map_err(|e| format!("{e:?}"))?;
+        let promise = share.call1(&wasm_bindgen::JsValue::NULL, &list).map_err(|e| format!("{e:?}"))?;
         wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(promise)).await.map(|_| ()).map_err(|e| format!("{e:?}"))
     }
 

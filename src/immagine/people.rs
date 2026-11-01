@@ -8,6 +8,7 @@ use crate::logic::models::person::{PeopleOrder, Person};
 use crate::logic::models::timeline::TimelineItem;
 use crate::theme::{Palette, BLUE, RED};
 use crate::host::{Current as H, Host};
+use crate::components::tap;
 use gpui_kit::*;
 use std::rc::Rc;
 
@@ -75,7 +76,7 @@ async fn all_people(origin: &str, token: &str) -> Result<Vec<Person>, ClientErro
 }
 
 /// Every photo of one person, newest first; photos without a capture date sort last.
-async fn person_photos(origin: &str, person_id: &str, token: &str) -> Result<Vec<TimelineItem>, ClientError> {
+async fn person_photos(origin: &str, person_id: &str, token: &str, cutoff: i64) -> Result<Vec<TimelineItem>, ClientError> {
     let client = ImmichClient::new(origin, H::transport())?;
     let mut items: Vec<TimelineItem> = Vec::new();
     for page in 1..=MAX_PAGES {
@@ -86,7 +87,7 @@ async fn person_photos(origin: &str, person_id: &str, token: &str) -> Result<Vec
             break;
         }
     }
-    items.retain(|item| !item.is_trashed);
+    items.retain(|item| !item.is_trashed && !crate::logic::hidden_before::hides_iso(item.sort_date.as_deref(), cutoff));
     items.sort_by(|a, b| b.sort_date.cmp(&a.sort_date));
     Ok(items)
 }
@@ -139,11 +140,12 @@ impl Immagine {
         cx.notify();
     }
 
-    fn load_person_photos(&mut self, id: String, cx: &mut Context<Self>) {
+    pub(super) fn load_person_photos(&mut self, id: String, cx: &mut Context<Self>) {
+        let cutoff = self.hidden_cutoff();
         let origin = self.origin.clone();
         let token = self.token.clone();
         cx.spawn(async move |this, cx| {
-            let result = person_photos(&origin, &id, &token).await;
+            let result = person_photos(&origin, &id, &token, cutoff).await;
             let _ = this.update(cx, |t, cx| {
                 // The user may have left the page or opened another person meanwhile.
                 match result {
@@ -275,12 +277,7 @@ impl Immagine {
                                             .text_color(label)
                                             .child(name),
                                     )
-                                    .on_click(move |_, window, cx| {
-                                        if window.tap_caught_fling() {
-                                            return;
-                                        }
-                                        view.update(cx, |this, cx| this.open_person(target.clone(), cx)).ok();
-                                    })
+                                    .on_click(tap::weak(view, move |this, cx| this.open_person(target.clone(), cx)))
                             })
                             .collect::<Vec<_>>();
                         div().h(px(row_h)).px(px(PAD)).flex().gap(px(GAP)).children(tiles).into_any_element()
@@ -333,7 +330,7 @@ impl Immagine {
         };
         let name = page.person.display_name().to_string();
 
-        let back = div().flex().flex_row().child(super::icons::back_chip(p.glass_tint, "person-back", rgb(BLUE).into()).on_click(cx.listener(|this, _, _, cx| {
+        let back = div().flex().flex_row().child(crate::components::button::back("person-back", crate::components::button::Surface::new(p.glass_tint), rgb(BLUE).into()).on_click(cx.listener(|this, _, _, cx| {
             this.people.open = None;
             cx.notify();
         })));

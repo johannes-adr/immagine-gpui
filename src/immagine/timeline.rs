@@ -3,12 +3,14 @@
 use super::{thumbs, Immagine, Screen};
 use crate::host::Pinch;
 use crate::logic::grid::hit::HitGeom;
-use crate::logic::grid::layout::ZOOM_LEVELS;
+use crate::logic::grid::layout::{head_gap, ZOOM_LEVELS};
 use crate::components::glass::glass_blur;
 use crate::theme::Palette;
 use crate::logic::models::timeline::TimelineItem;
 use crate::logic::range_groups::{format_range, month_label, parse_bucket};
 use gpui_kit::prelude::FluentBuilder;
+use crate::components::measure;
+use crate::components::tap;
 use gpui_kit::*;
 use std::rc::Rc;
 
@@ -45,12 +47,18 @@ impl Immagine {
         }
         match event {
             Pinch::Begin => {
+                self.sb_cancel_touch(cx);
                 self.sel_cancel_touch(cx);
                 self.grid_begin()
             }
             Pinch::Move { ratio, .. } => self.grid_apply(ratio, cx),
             Pinch::End => self.grid_release(cx),
-            Pinch::Down { .. } | Pinch::Drag { .. } | Pinch::Up { .. } => self.sel_touch(event, cx),
+            Pinch::Down { .. } | Pinch::Drag { .. } | Pinch::Up { .. } => {
+                // The scrollbar thumb takes its presses before selection painting sees them.
+                if !self.sb_touch(event, cx) {
+                    self.sel_touch(event, cx)
+                }
+            }
         }
     }
 
@@ -84,8 +92,9 @@ impl Immagine {
         if row_h > 0. && n > 0 {
             let offset: f32 = self.timeline_scroll.0.borrow().base_handle.offset().y.into();
             let pos = ((mid - offset) / row_h - top_rows as f32).max(0.);
-            let row = (pos as usize).min((n - 1) / cols);
-            self.grid_anchor = ((row * cols + cols / 2).min(n - 1), (pos - row as f32).clamp(0., 1.));
+            let skip = head_gap(n, cols);
+            let row = (pos as usize).min((n + skip - 1) / cols);
+            self.grid_anchor = ((row * cols + cols / 2).saturating_sub(skip).min(n - 1), (pos - row as f32).clamp(0., 1.));
         }
     }
 
@@ -249,7 +258,9 @@ impl Immagine {
         let cell = if cols_f.fract() == 0. { cell.floor() } else { (cell * scale).floor() / scale };
         let fade = if timeline { self.grid_fade } else { 1. };
         let visible = self.visible.clone();
-        let rows = items.len().div_ceil(columns);
+        // The timeline's short row is the first one, at the oldest photos.
+        let skip = if timeline { head_gap(items.len(), columns) } else { 0 };
+        let rows = (items.len() + skip).div_ceil(columns);
         let items_empty = items.is_empty();
         let footer = self.bottom.max(10.) + 76.;
         let downloaded = self.downloads.ids.clone();
@@ -281,7 +292,7 @@ impl Immagine {
             if timeline {
                 let first = range.start.saturating_sub(top_rows).min(rows.saturating_sub(1));
                 let last = range.end.saturating_sub(top_rows + 1).min(rows.saturating_sub(1));
-                visible.set((first * columns, ((last + 1) * columns).min(items.len()).saturating_sub(1)));
+                visible.set(((first * columns).saturating_sub(skip), ((last + 1) * columns).saturating_sub(skip).min(items.len()).saturating_sub(1)));
             }
             store.borrow_mut().begin_frame();
             if !zooming {
@@ -299,7 +310,7 @@ impl Immagine {
                         return div().h(px(row_h)).into_any_element();
                     }
                     let row = row - top_rows;
-                    let tiles = (0..columns).filter_map(|c| items.get(row * columns + c).map(|item| (row * columns + c, item))).map(|(idx, item)| {
+                    let tiles = (0..columns).filter_map(|c| (row * columns + c).checked_sub(skip)).filter_map(|idx| items.get(idx).map(|item| (idx, item))).map(|(idx, item)| {
                         let view = view.clone();
                         let store = store.clone();
                         let bounds_map = bounds_map.clone();
@@ -341,7 +352,7 @@ impl Immagine {
                                     .flex_row()
                                     .items_center()
                                     .justify_between()
-                                    .child(div().children(item.is_favorite.then(|| super::icons::heart_badge(icon, rgb(0xffffff).into()))))
+                                    .child(div().children(item.is_favorite.then(|| crate::components::icon::heart(icon, rgb(0xffffff).into(), true))))
                                     .child(
                                         div()
                                             .flex()
@@ -358,7 +369,7 @@ impl Immagine {
                                                     .text_size(px(icon))
                                                     .child(text)
                                             }))
-                                            .children(stored.then(|| super::icons::glyph(super::icons::Glyph::Downloaded, icon, rgb(0xffffff).into()))),
+                                            .children(stored.then(|| crate::components::icon::glyph(crate::components::icon::Glyph::Downloaded, icon, rgb(0xffffff).into()))),
                                     )
                             }))
                             .children((selecting && !hidden && cell >= 24.).then(|| {
@@ -366,7 +377,7 @@ impl Immagine {
                                 let d = if cell < 60. { 16. } else { 22. };
                                 let mark = div().absolute().right(px(4.)).bottom(px(4.)).size(px(d)).rounded_full().border_2().flex().items_center().justify_center();
                                 if selected {
-                                    mark.bg(rgb(crate::theme::BLUE)).border_color(rgb(0xffffff)).child(super::icons::glyph(super::icons::Glyph::Check, d * 0.62, rgb(0xffffff).into()))
+                                    mark.bg(rgb(crate::theme::BLUE)).border_color(rgb(0xffffff)).child(crate::components::icon::glyph(crate::components::icon::Glyph::Check, d * 0.62, rgb(0xffffff).into()))
                                 } else {
                                     mark.border_color(rgba(0xffffffe6)).bg(rgba(0x00000026))
                                 }
@@ -386,24 +397,21 @@ impl Immagine {
                                 .absolute()
                                 .size_full(),
                             )
-                            .on_click(move |_, window, cx| {
-                                if window.tap_caught_fling() {
+                            .on_click(tap::weak(view, move |this, cx| {
+                                if this.sb_swallow_click() {
                                     return;
                                 }
-                                view.update(cx, |this, cx| {
-                                    if selecting {
-                                        this.select_tap(&tap_id, cx)
-                                    } else {
-                                        this.open_viewer(all.clone(), idx, cx)
-                                    }
-                                })
-                                .ok();
-                            })
+                                if selecting {
+                                    this.select_tap(&tap_id, cx)
+                                } else {
+                                    this.open_viewer(all.clone(), idx, cx)
+                                }
+                            }))
                     });
                     // At the smallest cells a label names the month that starts in this row.
                     let label = (timeline && cols_f >= MONTH_LABEL_COLS as f32 - 0.5)
                         .then(|| {
-                            let (start, end) = (row * columns, ((row + 1) * columns).min(items.len()));
+                            let (start, end) = ((row * columns).saturating_sub(skip), ((row + 1) * columns).saturating_sub(skip).min(items.len()));
                             (start..end).find(|&i| i == 0 || month_of(&items[i]) != month_of(&items[i - 1])).and_then(|i| month_label(&items[i].date_bucket))
                         })
                         .flatten();
@@ -447,7 +455,7 @@ impl Immagine {
                     let after = range_end.saturating_sub(top_rows);
                     (after, after + span)
                 };
-                let (from, to) = ((from * columns).min(items.len()), (to * columns).min(items.len()));
+                let (from, to) = ((from * columns).saturating_sub(skip).min(items.len()), (to * columns).saturating_sub(skip).min(items.len()));
                 let origin = &origin;
                 let jobs = items[from..to]
                     .iter()
@@ -476,11 +484,11 @@ impl Immagine {
                 let (j, frac) = self.grid_anchor;
                 let h = vh - shift_top - shift_bottom;
                 let total = (top_rows + rows + bottom_rows) as f32 * row_h;
-                let y = (((top_rows + j / columns) as f32 + frac) * row_h - mid).clamp(0., (total - h).max(0.));
+                let y = (((top_rows + (j + skip) / columns) as f32 + frac) * row_h - mid).clamp(0., (total - h).max(0.));
                 list_scroll_set.set_offset(point(px(0.), px(-y)));
                 self.timeline_jump.take();
             } else if let Some(j) = self.timeline_jump.take() {
-                handle.scroll_to_item(top_rows + j / columns, ScrollStrategy::Center);
+                handle.scroll_to_item(top_rows + (j + skip) / columns, ScrollStrategy::Center);
             }
         }
         let list = list.track_scroll(handle);
@@ -493,7 +501,7 @@ impl Immagine {
         } else {
             div().size_full().child(list)
         };
-        div().flex_1().relative().child(list).child(canvas(move |bounds, _, _| grid_bounds.set(bounds), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
+        div().flex_1().relative().child(list).child(measure::bounds(move |b| grid_bounds.set(b)))
     }
 
     pub(super) fn timeline_view(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -511,6 +519,8 @@ impl Immagine {
         self.header_span.set(if self.range_bar { (first, last) } else { (0, 0) });
         let span = if self.range_bar { self.items.get(first).zip(self.items.get(last)).and_then(|(a, b)| format_range(&a.date_bucket, &b.date_bucket)) } else { None };
         let subtitle = match span {
+            // In select mode the line under the title tells what is selected; the toolbar only holds the actions.
+            _ if self.select.on => self.share.notice.clone().unwrap_or_else(|| super::selection::title(self.select.count())),
             Some(span) => span,
             None if self.status.is_empty() => format!("{count} Fotos"),
             None => self.status.clone(),

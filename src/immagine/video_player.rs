@@ -630,13 +630,121 @@ pub(super) fn fmt_time(us: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::fmt_time;
+    use super::*;
+    use ::gpui::TestAppContext;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
 
-    #[test]
+    #[::core::prelude::v1::test]
     fn formats_positions() {
         assert_eq!(fmt_time(0), "0:00");
         assert_eq!(fmt_time(65_900_000), "1:05");
         assert_eq!(fmt_time(3_725_000_000), "1:02:05");
         assert_eq!(fmt_time(-5), "0:00");
+    }
+
+    /// Serves `file` with single-range support on a local port; returns the URL.
+    fn serve(file: &'static [u8]) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                std::thread::spawn(move || {
+                    let mut stream = stream;
+                    let mut buf = [0u8; 4096];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let head = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let total = file.len();
+                    let range = head
+                        .lines()
+                        .find_map(|l| l.to_ascii_lowercase().strip_prefix("range: bytes=").map(|r| r.trim().to_string()))
+                        .and_then(|r| {
+                            let (a, b) = r.split_once('-')?;
+                            Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?.min(total - 1)))
+                        });
+                    let (status, body, extra) = match range {
+                        Some((a, b)) if a < total => ("206 Partial Content", &file[a..=b], format!("Content-Range: bytes {a}-{b}/{total}\r\n")),
+                        _ => ("200 OK", file, String::new()),
+                    };
+                    let _ = write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n", body.len());
+                    let _ = stream.write_all(body);
+                });
+            }
+        });
+        format!("http://127.0.0.1:{port}/v.mp4")
+    }
+
+    struct Probe {
+        player: Option<Player>,
+    }
+
+    impl Render for Probe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    /// The real `Player` against a local range server and the platform's decoders and audio output: streaming
+    /// open, decoding, pictures chosen by the clock, a seek, play to the end, replay, pause. Skipped where the
+    /// platform has no decoder.
+    #[::core::prelude::v1::test]
+    fn plays_a_local_file_through_the_platform_decoders() {
+        let url = serve(include_bytes!("../logic/testdata/tiny.mp4"));
+        let mut cx = TestAppContext::single();
+        cx.executor().allow_parking();
+        let (view, cx) = cx.add_window_view(|_, _| Probe { player: None });
+        view.update(cx, |p, cx| p.player = Some(Player::open(url, None, cx)));
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let (mut shown, mut ended, mut max_pos, mut seeked) = (0, false, 0i64, false);
+        let mut failed = false;
+        while Instant::now() < deadline && !ended && !failed {
+            std::thread::sleep(Duration::from_millis(8));
+            cx.run_until_parked();
+            view.update_in(cx, |p, window, _| {
+                let player = p.player.as_mut().unwrap();
+                player.tick(window);
+                if let Status::Failed(e) = &player.status {
+                    assert!(e.contains("nicht abspielen"), "player failed: {e}");
+                    failed = true;
+                }
+                if player.frame().is_some() {
+                    shown += 1;
+                }
+                max_pos = max_pos.max(player.position_us);
+                if !seeked && player.position_us > 600_000 {
+                    seeked = true;
+                    player.seek(1_500_000);
+                }
+                ended = player.ended;
+            });
+        }
+        if failed {
+            eprintln!("no decoder on this platform: skipped");
+            return;
+        }
+        eprintln!("shown {shown} ticks, max position {max_pos} us, seeked {seeked}, ended {ended}");
+        assert!(ended, "the player never reached the end");
+        assert!(shown > 5);
+        assert!(max_pos >= 1_800_000);
+        // Replay from the end: toggle_play seeks to 0 and plays again.
+        view.update(cx, |p, _| p.player.as_mut().unwrap().toggle_play());
+        let t = Instant::now();
+        let mut again = false;
+        while t.elapsed() < Duration::from_secs(5) && !again {
+            std::thread::sleep(Duration::from_millis(8));
+            cx.run_until_parked();
+            view.update_in(cx, |p, window, _| {
+                let player = p.player.as_mut().unwrap();
+                player.tick(window);
+                again = player.started && player.position_us > 300_000 && !player.ended;
+            });
+        }
+        assert!(again, "replay did not start");
+        view.update(cx, |p, _| {
+            let player = p.player.as_mut().unwrap();
+            player.toggle_play();
+            assert!(!player.is_playing());
+        });
     }
 }

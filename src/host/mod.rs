@@ -5,7 +5,7 @@
 //! no `web_sys`/`wasm_bindgen` outside `host/web`, no filesystem or HTTP-client crates outside `host/desktop`.
 //!
 //! * `web` (wasm32): `fetch`, IndexedDB, `localStorage`, `createImageBitmap`, WebCodecs + WebAudio, pointer events.
-//! * `desktop` (everything else): `ureq`, files under the user's data dir, the `image` crate.
+//! * `desktop` (everything else): `ureq`, files under the user's data dir, the `image` crate; on macOS and iOS also VideoToolbox + AudioToolbox for video.
 //!
 //! Dispatch is static (`Current` is selected by `cfg`), so the traits can use `async fn` and need no `Send`.
 
@@ -102,6 +102,13 @@ pub struct RangeResponse {
 /// Parses `bytes a-b/total` (`total` may be `*`).
 pub fn content_range_total(value: &str) -> Option<u64> {
     value.rsplit('/').next()?.trim().parse().ok()
+}
+
+/// A file for the share sheet.
+pub struct ShareFile {
+    pub name: String,
+    pub mime: &'static str,
+    pub bytes: Vec<u8>,
 }
 
 pub struct VideoConfig {
@@ -224,13 +231,14 @@ pub trait Host: 'static {
     /// that ignores the header answers with the whole file (`partial == false`).
     async fn fetch_range(url: &str, start: u64, end_inclusive: u64) -> Result<RangeResponse, String>;
     /// A video decoder for `config`; every decoded picture (presentation order, scaled to a sane size) goes to
-    /// `on_frame` with its timestamp in microseconds. `None` if the platform has no video decoder (desktop).
+    /// `on_frame` with its timestamp in microseconds. `None` if the platform has no video decoder (desktop other than macOS/iOS).
     fn video_decoder(config: VideoConfig, on_frame: impl Fn(i64, Decoded) + 'static) -> Option<Self::VideoDecoder>;
     /// The audio output. Must be called from a user gesture (the browser only unlocks sound then). `None` if the
     /// platform has none.
     fn audio_output() -> Option<Self::AudioOut>;
-    /// Hands a file to the system share sheet. `Err` when the platform has none (desktop) or the user cancels.
-    async fn share_file(name: &str, mime: &str, bytes: Vec<u8>) -> Result<(), String>;
+    /// Hands files to the system share sheet (iOS `UIActivityViewController`, macOS `NSSharingServicePicker`, web
+    /// `navigator.share`). `Err` when the platform has none; a cancel is an `Err` containing "AbortError".
+    async fn share_files(files: Vec<ShareFile>) -> Result<(), String>;
     /// Reports pinch and raw single-touch events. `None` if the platform has no such input source.
     fn install_gestures(on_event: impl Fn(Pinch) + 'static) -> Option<Self::Gestures>;
 }

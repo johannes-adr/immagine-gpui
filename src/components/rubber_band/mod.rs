@@ -5,8 +5,10 @@
 //! root, which asks `target` for the scroll handle of whatever scrolls at that moment (`None` = no band, e.g. while
 //! another layer owns the gesture).
 
-use crate::logic::rubber_band::{Phase, RubberBand as Band};
-use crate::util::now_ms;
+mod band;
+
+use band::{Phase, RubberBand as Band};
+use crate::components::clock::now_ms;
 use gpui_kit::*;
 use std::cell::Cell;
 

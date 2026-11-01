@@ -162,14 +162,39 @@ impl<T: HttpTransport> ImmichClient<T> {
     }
 
     /// `POST /api/search/smart`: natural-language (CLIP) search. `kind` is `IMAGE` or `VIDEO` to restrict the media type.
-    pub async fn smart_search(&self, query: &str, kind: Option<&str>, page: u32, size: u32, token: &str) -> Result<SearchMetadataResponse, ClientError> {
-        let body = json_body(&TextSearchBody { query: Some(query), original_file_name: None, kind, page, size, with_archived: true })?;
+    /// `taken_after` (ISO instant) limits the answer to photos taken at or after it.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn smart_search(
+        &self,
+        query: &str,
+        kind: Option<&str>,
+        taken_after: Option<&str>,
+        page: u32,
+        size: u32,
+        token: &str,
+    ) -> Result<SearchMetadataResponse, ClientError> {
+        let body = json_body(&TextSearchBody { query: Some(query), original_file_name: None, kind, taken_after, page, size, with_archived: true })?;
         self.fetch_json(request(Method::Post, "/api/search/smart", Some(token), Some(body))).await
     }
 
     /// `POST /api/search/metadata` filtered by (part of) the original file name.
-    pub async fn filename_search(&self, name: &str, kind: Option<&str>, page: u32, size: u32, token: &str) -> Result<SearchMetadataResponse, ClientError> {
-        let body = json_body(&TextSearchBody { query: None, original_file_name: Some(name), kind, page, size, with_archived: true })?;
+    pub async fn filename_search(
+        &self,
+        name: &str,
+        kind: Option<&str>,
+        taken_after: Option<&str>,
+        page: u32,
+        size: u32,
+        token: &str,
+    ) -> Result<SearchMetadataResponse, ClientError> {
+        let body = json_body(&TextSearchBody { query: None, original_file_name: Some(name), kind, taken_after, page, size, with_archived: true })?;
+        self.fetch_json(request(Method::Post, "/api/search/metadata", Some(token), Some(body))).await
+    }
+
+    /// `POST /api/search/metadata` for the trash: `withDeleted` plus `trashedAfter` (epoch) keeps only assets that
+    /// have a `deletedAt`. The flat fields are deprecated since Immich 3.2 but still accepted.
+    pub async fn trashed_assets(&self, page: u32, size: u32, token: &str) -> Result<SearchMetadataResponse, ClientError> {
+        let body = json_body(&TrashSearchBody { page, size, with_deleted: true, trashed_after: "1970-01-01T00:00:00.000Z" })?;
         self.fetch_json(request(Method::Post, "/api/search/metadata", Some(token), Some(body))).await
     }
 
@@ -289,6 +314,12 @@ impl<T: HttpTransport> ImmichClient<T> {
 
     pub async fn set_favorite(&self, ids: &[String], favorite: bool, token: &str) -> Result<(), ClientError> {
         let body = json_body(&IdsFavorite { ids, is_favorite: favorite })?;
+        self.fetch(request(Method::Put, "/api/assets", Some(token), Some(body))).await.map(|_| ())
+    }
+
+    /// `"archive"` or `"timeline"` (`PUT /api/assets`, `visibility`).
+    pub async fn set_visibility(&self, ids: &[String], visibility: &str, token: &str) -> Result<(), ClientError> {
+        let body = json_body(&IdsVisibility { ids, visibility })?;
         self.fetch(request(Method::Put, "/api/assets", Some(token), Some(body))).await.map(|_| ())
     }
 
@@ -545,6 +576,15 @@ struct SearchBody {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct TrashSearchBody {
+    page: u32,
+    size: u32,
+    with_deleted: bool,
+    trashed_after: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct TextSearchBody<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     query: Option<&'a str>,
@@ -552,6 +592,8 @@ struct TextSearchBody<'a> {
     original_file_name: Option<&'a str>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     kind: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    taken_after: Option<&'a str>,
     page: u32,
     size: u32,
     with_archived: bool,
@@ -591,6 +633,12 @@ struct Ids<'a> {
 struct IdsFavorite<'a> {
     ids: &'a [String],
     is_favorite: bool,
+}
+
+#[derive(Serialize)]
+struct IdsVisibility<'a> {
+    ids: &'a [String],
+    visibility: &'a str,
 }
 
 #[derive(Serialize)]
@@ -915,6 +963,32 @@ mod tests {
         assert_eq!(body_json(&req), json!({"albumIds": ["al1"], "page": 2, "size": 100, "withDeleted": false}));
     }
 
+    #[test]
+    fn text_searches_send_taken_after_only_when_set() {
+        const EMPTY: &str = r#"{"assets":{"total":0,"count":0,"nextPage":null,"items":[]}}"#;
+        let client = client_with(ok(EMPTY));
+        block_on(client.smart_search("strand", Some("IMAGE"), Some("2024-03-09T00:00:00.000Z"), 1, 50, TOKEN)).unwrap();
+        let req = sent(&client);
+        assert_eq!(req.path, "/api/search/smart");
+        assert_eq!(
+            body_json(&req),
+            json!({"query": "strand", "type": "IMAGE", "takenAfter": "2024-03-09T00:00:00.000Z", "page": 1, "size": 50, "withArchived": true})
+        );
+
+        let client = client_with(ok(EMPTY));
+        block_on(client.filename_search("IMG", None, Some("2024-03-09T00:00:00.000Z"), 1, 50, TOKEN)).unwrap();
+        let req = sent(&client);
+        assert_eq!(req.path, "/api/search/metadata");
+        assert_eq!(
+            body_json(&req),
+            json!({"originalFileName": "IMG", "takenAfter": "2024-03-09T00:00:00.000Z", "page": 1, "size": 50, "withArchived": true})
+        );
+
+        let client = client_with(ok(EMPTY));
+        block_on(client.filename_search("IMG", None, None, 1, 50, TOKEN)).unwrap();
+        assert_eq!(body_json(&sent(&client)), json!({"originalFileName": "IMG", "page": 1, "size": 50, "withArchived": true}));
+    }
+
     // MARK: - Binary downloads
 
     const JPEG: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
@@ -1032,6 +1106,16 @@ mod tests {
         assert_eq!(req.method, Method::Put);
         assert_eq!(req.path, "/api/assets");
         assert_eq!(body_json(&req), json!({"ids": [ASSET], "isFavorite": true}));
+    }
+
+    #[test]
+    fn set_visibility_puts_the_visibility_for_all_ids() {
+        let client = client_with(HttpResponse::json(204, ""));
+        block_on(client.set_visibility(&[ASSET.to_string()], "archive", TOKEN)).unwrap();
+        let req = sent(&client);
+        assert_eq!(req.method, Method::Put);
+        assert_eq!(req.path, "/api/assets");
+        assert_eq!(body_json(&req), json!({"ids": [ASSET], "visibility": "archive"}));
     }
 
     #[test]

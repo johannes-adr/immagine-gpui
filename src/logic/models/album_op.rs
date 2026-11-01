@@ -13,6 +13,9 @@ pub enum AlbumOpKind {
     Remove,
     Trash,
     Restore,
+    /// Visibility `archive` / back to `timeline`.
+    Archive,
+    Unarchive,
     /// The favorites, sorted into like an album.
     Favorite,
     Unfavorite,
@@ -23,7 +26,7 @@ impl AlbumOpKind {
     pub fn affects_assets_only(self) -> bool {
         matches!(
             self,
-            AlbumOpKind::Trash | AlbumOpKind::Restore | AlbumOpKind::Favorite | AlbumOpKind::Unfavorite
+            AlbumOpKind::Trash | AlbumOpKind::Restore | AlbumOpKind::Archive | AlbumOpKind::Unarchive | AlbumOpKind::Favorite | AlbumOpKind::Unfavorite
         )
     }
 }
@@ -61,6 +64,14 @@ impl AlbumOp {
         Self::new(AlbumOpKind::Restore, None, ids)
     }
 
+    pub fn archive(ids: Vec<String>) -> Self {
+        Self::new(AlbumOpKind::Archive, None, ids)
+    }
+
+    pub fn unarchive(ids: Vec<String>) -> Self {
+        Self::new(AlbumOpKind::Unarchive, None, ids)
+    }
+
     pub fn favorite(ids: Vec<String>) -> Self {
         Self::new(AlbumOpKind::Favorite, None, ids)
     }
@@ -78,6 +89,8 @@ impl AlbumOp {
             AlbumOpKind::Remove => AlbumOp::add(ids, &album),
             AlbumOpKind::Trash => AlbumOp::restore(ids),
             AlbumOpKind::Restore => AlbumOp::trash(ids),
+            AlbumOpKind::Archive => AlbumOp::unarchive(ids),
+            AlbumOpKind::Unarchive => AlbumOp::archive(ids),
             AlbumOpKind::Favorite => AlbumOp::unfavorite(ids),
             AlbumOpKind::Unfavorite => AlbumOp::favorite(ids),
         }
@@ -110,6 +123,15 @@ mod tests {
         let remove = add.inverse();
         assert_eq!(remove, AlbumOp::remove(ids(&["x"]), "in"));
         assert_eq!(remove.inverse(), AlbumOp::add(ids(&["x"]), "in"));
+    }
+
+    #[test]
+    fn archive_and_unarchive_are_each_other_inverse() {
+        let archive = AlbumOp::archive(ids(&["x"]));
+        assert_eq!(archive.kind, AlbumOpKind::Archive);
+        assert!(archive.album_id.is_none() && archive.kind.affects_assets_only());
+        assert_eq!(archive.inverse(), AlbumOp::unarchive(ids(&["x"])));
+        assert_eq!(archive.inverse().inverse(), archive);
     }
 
     #[test]

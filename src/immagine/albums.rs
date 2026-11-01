@@ -2,7 +2,7 @@
 //! Albums tab: album and folder tiles from the store, album page with its photos (`photo_grid`).
 
 use super::{thumbs, Immagine};
-use crate::components::glass::glass_div;
+use crate::components::button::{self, Surface};
 use crate::host::{Current as H, Host};
 use crate::logic::client::ImmichClient;
 use crate::logic::models::album::Album;
@@ -10,6 +10,7 @@ use crate::logic::models::album_tree::{AlbumPath, AlbumTree};
 use crate::logic::models::timeline::TimelineItem;
 use crate::logic::store::MemoryStore;
 use crate::theme::{Palette, BLUE};
+use crate::components::tap;
 use gpui_kit::*;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
@@ -27,9 +28,61 @@ struct Cover {
     thumbhash: Option<String>,
 }
 
+/// The extra pages at the bottom of the top-level browser. They are views on the store (no server album, no
+/// links), so they never go through `repair_albums` or the album picker.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Special {
+    Videos,
+    Trash,
+    /// Hidden entry: its tile is an empty, tappable slot.
+    Archive,
+}
+
+impl Special {
+    const ALL: [Special; 3] = [Special::Videos, Special::Trash, Special::Archive];
+
+    fn title(self) -> &'static str {
+        match self {
+            Special::Videos => "Videos",
+            Special::Trash => "Papierkorb",
+            Special::Archive => "Archiviert",
+        }
+    }
+
+    fn empty(self) -> &'static str {
+        match self {
+            Special::Videos => "Keine Videos",
+            Special::Trash => "Papierkorb ist leer",
+            Special::Archive => "Archiv ist leer",
+        }
+    }
+
+    /// Glyph for an empty tile; the hidden Archiviert slot shows none.
+    fn glyph(self) -> Option<crate::components::icon::Glyph> {
+        use crate::components::icon::Glyph;
+        match self {
+            Special::Videos => Some(Glyph::Play),
+            Special::Trash => Some(Glyph::Trash),
+            Special::Archive => None,
+        }
+    }
+
+    /// Newest first.
+    fn items(self, store: &MemoryStore) -> Vec<TimelineItem> {
+        use crate::logic::store::Store;
+        match self {
+            Special::Videos => store.video_items(),
+            Special::Trash => store.trashed_items(),
+            Special::Archive => store.archived_items(),
+        }
+    }
+}
+
 /// The album page that is open, with its photos newest first.
 struct OpenAlbum {
     id: String,
+    /// Set for the extra pages (Videos, Papierkorb); `id` is then synthetic.
+    special: Option<Special>,
     name: String,
     items: Rc<Vec<TimelineItem>>,
     scroll: UniformListScrollHandle,
@@ -46,6 +99,10 @@ pub(super) struct AlbumsState {
     /// Folder shown in the browser ("" = top level).
     path: String,
     open: Option<OpenAlbum>,
+    /// Count and newest asset of the extra pages, in `Special::ALL` order.
+    specials: Vec<(usize, Option<Cover>)>,
+    /// Bumped on every open of the Papierkorb, so a late server answer for an earlier open is dropped.
+    trash_serial: u32,
 }
 
 impl AlbumsState {
@@ -68,7 +125,8 @@ impl AlbumsState {
             .albums
             .iter()
             .filter_map(|album| {
-                let cover = match album.album_thumbnail_asset_id.as_deref().filter(|id| !id.is_empty()) {
+                // A cover that is archived or hidden by the "show from" date falls back to the newest shown photo.
+                let cover = match album.album_thumbnail_asset_id.as_deref().filter(|id| !id.is_empty() && !store.is_hidden(id) && !store.is_archived(id)) {
                     Some(id) => Cover { asset_id: id.to_string(), thumbhash: store.thumbhash(id) },
                     None => store
                         .album_assets(&album.id)
@@ -79,8 +137,19 @@ impl AlbumsState {
                 Some((album.id.clone(), cover))
             })
             .collect();
+        self.specials = Special::ALL
+            .iter()
+            .map(|special| {
+                let items = special.items(store);
+                let cover = items.first().map(|item| Cover { asset_id: item.id.clone(), thumbhash: item.thumbhash.clone() });
+                (items.len(), cover)
+            })
+            .collect();
         if let Some(open) = self.open.as_mut() {
-            open.items = Rc::new(newest_first(store.album_assets(&open.id)));
+            open.items = Rc::new(match open.special {
+                Some(special) => special.items(store),
+                None => newest_first(store.album_assets(&open.id)),
+            });
         }
         if !self.tree.contains_folder(&self.path) {
             self.path.clear();
@@ -117,18 +186,10 @@ fn caption(p: &Palette, name: &str, detail: String) -> Div {
         .child(div().text_size(px(13.)).text_color(p.secondary).child(detail))
 }
 
-/// Glass chip used for the back buttons.
-fn chip(p: &Palette, id: &'static str, label: String) -> Stateful<Div> {
-    glass_div(p.glass_tint, 18.)
-        .id(id)
-        .h(px(36.))
-        .px_4()
-        .flex()
-        .items_center()
-        .text_size(px(17.))
-        .text_color(rgb(BLUE))
-        .active(|s| s.opacity(0.6))
-        .child(label)
+/// The Archiviert entry: an empty tile-sized slot (nothing painted, no pressed state), tappable through the
+/// caller's `on_click`.
+fn hidden_slot(i: usize, tile: f32) -> Stateful<Div> {
+    div().id(("album-special", i)).w(px(tile)).h(px(tile))
 }
 
 impl Immagine {
@@ -152,9 +213,66 @@ impl Immagine {
             .map(|a| AlbumPath::leaf_of_album_name(&a.album_name))
             .unwrap_or_default();
         let items = Rc::new(newest_first(engine.store().album_assets(id)));
-        self.albums.open = Some(OpenAlbum { id: id.to_string(), name, items, scroll: UniformListScrollHandle::new() });
+        self.albums.open = Some(OpenAlbum { id: id.to_string(), special: None, name, items, scroll: UniformListScrollHandle::new() });
         cx.notify();
         self.repair_albums(vec![id.to_string()], cx);
+    }
+
+    /// Opens Videos or Papierkorb: the store's current contents at once, refreshed on every sync.
+    /// The Papierkorb is also asked from the server (see `load_trash`).
+    fn open_special(&mut self, special: Special, cx: &mut Context<Self>) {
+        let Some(engine) = self.engine.as_ref() else { return };
+        let items = Rc::new(special.items(engine.store()));
+        self.albums.open = Some(OpenAlbum {
+            id: format!("special:{}", special.title()),
+            special: Some(special),
+            name: special.title().to_string(),
+            items,
+            scroll: UniformListScrollHandle::new(),
+        });
+        cx.notify();
+        if special == Special::Trash {
+            self.load_trash(cx);
+        }
+    }
+
+    /// The store may lack trashed assets (a full sync lists with `withDeleted: false`; only the sync stream delivers
+    /// them). Lists the server's trash and adds the assets the store does not know, marked trashed. Additive: what
+    /// the store already has (e.g. a photo restored locally whose op is still queued) is left alone.
+    fn load_trash(&mut self, cx: &mut Context<Self>) {
+        self.albums.trash_serial += 1;
+        let serial = self.albums.trash_serial;
+        let (origin, token) = (self.origin.clone(), self.token.clone());
+        cx.spawn(async move |this, cx| {
+            let Ok(client) = ImmichClient::new(&origin, H::transport()) else { return };
+            let mut found = Vec::new();
+            for page in 1..=100u32 {
+                let Ok(answer) = client.trashed_assets(page, 1000, &token).await else { break };
+                let got = answer.assets.items.len();
+                found.extend(answer.assets.items);
+                if answer.assets.next_page.is_none() || got == 0 {
+                    break;
+                }
+            }
+            let _ = this.update(cx, |t, cx| {
+                use crate::logic::store::Store;
+                if t.albums.trash_serial != serial || found.is_empty() {
+                    return;
+                }
+                let Some(engine) = t.engine.as_mut() else { return };
+                let store = engine.store_mut();
+                let missing: Vec<_> = found.into_iter().filter(|a| store.asset(&a.id).is_none()).collect();
+                if missing.is_empty() {
+                    return;
+                }
+                let ids: Vec<String> = missing.iter().map(|a| a.id.clone()).collect();
+                store.upsert_assets(&missing);
+                store.trash_assets(&ids);
+                t.albums.refresh(engine.store());
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Self-heal for a store whose album links are missing (a client that synced before link events were handled
@@ -257,8 +375,12 @@ impl Immagine {
         let Some(open) = self.albums.open.as_ref() else {
             return div().into_any_element();
         };
-        let subtitle = count_label(open.items.len(), "Foto", "Fotos");
-        let back = div().flex().flex_row().child(super::icons::back_chip(p.glass_tint, "album-back", rgb(BLUE).into()).on_click(cx.listener(|this, _, _, cx| this.close_album(cx))));
+        let subtitle = match open.special {
+            Some(Special::Videos) => count_label(open.items.len(), "Video", "Videos"),
+            Some(special) if open.items.is_empty() => special.empty().to_string(),
+            _ => count_label(open.items.len(), "Foto", "Fotos"),
+        };
+        let back = div().flex().flex_row().child(button::back("album-back", Surface::new(p.glass_tint), rgb(BLUE).into()).on_click(cx.listener(|this, _, _, cx| this.close_album(cx))));
         let header = div()
             .px(px(PAD))
             .pt(px(20.))
@@ -298,13 +420,14 @@ impl Immagine {
                 let picture = covers.get(k).cloned().flatten();
                 div()
                     .size(px(half))
+                    .rounded(px(super::TILE_RADIUS))
                     .bg(p.chip)
-                    .children(picture.map(|image| img(image).size_full().object_fit(ObjectFit::Cover)))
+                    .children(picture.map(|image| img(image).size_full().rounded(px(super::TILE_RADIUS)).object_fit(ObjectFit::Cover)))
                     .into_any_element()
             });
             let cell = div()
                 .size(px(tile))
-                .rounded(px(16.))
+                .rounded(px(super::TILE_RADIUS))
                 .overflow_hidden()
                 .bg(p.chip)
                 .flex()
@@ -330,10 +453,10 @@ impl Immagine {
             let count = st.counts.get(&album.id).copied().unwrap_or(album.asset_count.max(0) as usize);
             let cell = div()
                 .size(px(tile))
-                .rounded(px(16.))
+                .rounded(px(super::TILE_RADIUS))
                 .overflow_hidden()
                 .bg(p.chip)
-                .children(picture.map(|image| img(image).size_full().object_fit(ObjectFit::Cover)));
+                .children(picture.map(|image| img(image).size_full().rounded(px(super::TILE_RADIUS)).object_fit(ObjectFit::Cover)));
             let id = album.id.clone();
             tiles.push(
                 div()
@@ -345,13 +468,57 @@ impl Immagine {
                     .active(|s| s.opacity(0.6))
                     .child(cell)
                     .child(caption(p, &AlbumPath::leaf_of_album_name(&album.album_name), count_label(count, "Foto", "Fotos")))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if !window.tap_caught_fling() {
+                    .on_click(tap::listener(cx, move |this, cx| {
                             this.open_album(&id, cx)
-                        }
                     }))
                     .into_any_element(),
             );
+        }
+
+        // Videos, Papierkorb and the hidden Archiviert slot below the albums, set apart by a rule.
+        let mut extras: Vec<AnyElement> = Vec::new();
+        if st.path.is_empty() {
+            for (i, special) in Special::ALL.iter().copied().enumerate() {
+                if special == Special::Archive {
+                    // Invisible but real: an empty slot with a click handler and no feedback, no cover requested.
+                    extras.push(
+                        hidden_slot(i, tile)
+                            .on_click(tap::listener(cx, move |this, cx| {
+                                    this.open_special(special, cx)
+                            }))
+                            .into_any_element(),
+                    );
+                    continue;
+                }
+                let (count, cover) = st.specials.get(i).map(|(n, c)| (*n, c.as_ref())).unwrap_or((0, None));
+                let picture = self.cover_image(cover, &mut tally, cx);
+                let cell = div()
+                    .size(px(tile))
+                    .rounded(px(super::TILE_RADIUS))
+                    .overflow_hidden()
+                    .bg(p.chip)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .children(special.glyph().filter(|_| picture.is_none()).map(|g| crate::components::icon::glyph(g, 40., p.secondary)))
+                    .children(picture.map(|image| img(image).size_full().rounded(px(super::TILE_RADIUS)).object_fit(ObjectFit::Cover)));
+                let (one, many) = if special == Special::Videos { ("Video", "Videos") } else { ("Foto", "Fotos") };
+                extras.push(
+                    div()
+                        .id(("album-special", i))
+                        .w(px(tile))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .active(|s| s.opacity(0.6))
+                        .child(cell)
+                        .child(caption(p, special.title(), count_label(count, one, many)))
+                        .on_click(tap::listener(cx, move |this, cx| {
+                                this.open_special(special, cx)
+                        }))
+                        .into_any_element(),
+                );
+            }
         }
 
         // Breadcrumb and back chip inside nested folders.
@@ -362,7 +529,7 @@ impl Immagine {
             let parent = AlbumPath::parent_of(&st.path);
             header = header.child(
                 div().flex().flex_row().child(
-                    super::icons::back_chip(p.glass_tint, "albums-up", rgb(BLUE).into()).on_click(cx.listener(move |this, _, _, cx| this.go_to_folder(parent.clone(), cx))),
+                    button::back("albums-up", Surface::new(p.glass_tint), rgb(BLUE).into()).on_click(cx.listener(move |this, _, _, cx| this.go_to_folder(parent.clone(), cx))),
                 ),
             );
             let mut crumbs = div().flex().flex_row().flex_wrap().gap_1().text_size(px(15.)).text_color(p.secondary);
@@ -398,14 +565,9 @@ impl Immagine {
                     .child(div().flex_1().min_w_0().text_size(px(34.)).font_weight(FontWeight::BOLD).truncate().child(title))
                     .child(self.jobs_button(p, cx))
                     .child(
-                        glass_div(p.glass_tint, 18.)
-                            .id("albums-settings")
-                            .size(px(36.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .active(|s| s.opacity(0.6))
-                            .child(super::icons::glyph(super::icons::Glyph::Gear, 20., p.label))
+                        button::circle("albums-settings", Surface::new(p.glass_tint), 36.)
+                            .active(button::dim)
+                            .child(crate::components::icon::glyph(crate::components::icon::Glyph::Gear, 20., p.label))
                             .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
                     ),
             )
@@ -418,6 +580,16 @@ impl Immagine {
         } else {
             div().px(px(PAD)).pt(px(8.)).flex().flex_wrap().gap(px(GAP)).children(tiles).into_any_element()
         };
+        let extras = (!extras.is_empty()).then(|| {
+            div()
+                .px(px(PAD))
+                .pt(px(28.))
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(div().h(px(1.)).bg(p.chip))
+                .child(div().flex().flex_wrap().gap(px(GAP)).children(extras))
+        });
 
         self.rubber
             .shift(div().size_full().flex().flex_col().pt(px(self.top.max(12.))).child(header).child(
@@ -427,8 +599,41 @@ impl Immagine {
                     .overflow_y_scroll()
                     .track_scroll(&self.albums_scroll)
                     .child(body)
+                    .children(extras)
                     .child(div().h(px(self.bottom.max(10.) + 84.))),
             ))
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ::gpui::TestAppContext;
+    use std::cell::Cell;
+
+    struct Probe(Rc<Cell<u32>>);
+
+    impl Render for Probe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let taps = self.0.clone();
+            div().size_full().child(hidden_slot(2, 120.).on_click(move |_, _, _| taps.set(taps.get() + 1)))
+        }
+    }
+
+    /// The invisible tile has no children and paints nothing, yet a click on its area arrives. (A test of
+    /// `album_browser` itself needs a synced engine; this covers the element that carries the handler.)
+    #[::core::prelude::v1::test]
+    fn hidden_slot_is_tappable() {
+        let mut cx = TestAppContext::single();
+        let taps = Rc::new(Cell::new(0));
+        let (_, cx) = cx.add_window_view({
+            let taps = taps.clone();
+            move |_, _| Probe(taps)
+        });
+        cx.simulate_click(point(px(60.), px(60.)), Modifiers::none());
+        assert_eq!(taps.get(), 1);
+        cx.simulate_click(point(px(300.), px(300.)), Modifiers::none());
+        assert_eq!(taps.get(), 1, "outside the slot nothing happens");
     }
 }

@@ -4,7 +4,11 @@
 //! stand-in until the larger preview arrives, and the full-size rendition once zoomed in.
 
 use super::{thumbs, Immagine};
+use crate::components::button::{self, Surface};
 use crate::components::glass::glass_div_with;
+use crate::components::measure;
+use crate::components::morph::{self, Morph};
+use crate::components::sheet::Pointer;
 use crate::logic::client::ImmichClient;
 use crate::logic::crop_geometry::{self, CropAspect, CropHandle, HANDLE_TOLERANCE};
 use crate::logic::grid::layout::{Point as CPoint, Rect as CRect, Size as CSize};
@@ -14,8 +18,11 @@ use crate::logic::models::asset::Asset;
 use crate::logic::models::asset_details::InfoFormat;
 use crate::logic::models::asset_info::AssetInfoFormat;
 use crate::logic::models::timeline::TimelineItem;
+use crate::logic::store::Store;
 use crate::theme::{BLUE, RED};
-use crate::util::{anim, lerp, now_ms};
+use crate::components::ease::{anim, lerp};
+use crate::util::now_ms;
+use super::share::ShareFrom;
 use super::video_player::{fmt_time, Player, Status};
 use crate::host::{Current as H, Host, Pinch};
 use gpui_kit::*;
@@ -45,11 +52,10 @@ const TAP_SLOP: f32 = 8.;
 const CHROME_MS: f64 = 180.;
 /// Dark grey of the viewer's glass buttons, over the viewer's black background.
 const VIEWER_TINT: Hsla = Hsla { h: 0., s: 0., l: 0.28, a: 0.62 };
-/// Darker tint of the delete confirmation, which is bigger and carries text.
-const DIALOG_TINT: Hsla = Hsla { h: 0., s: 0., l: 0.12, a: 0.94 };
-/// Length of the morph from the trash button to the delete confirmation (and back).
-const DIALOG_MS: f64 = 340.;
 const DIALOG_SIZE: (f32, f32) = (292., 268.);
+/// The "..." menu: width and height of one row.
+const MENU_WIDTH: f32 = 262.;
+const MENU_ROW: f32 = 52.;
 /// Smallest side of the crop box (fraction of the image).
 const MIN_CROP: f64 = 0.08;
 
@@ -138,8 +144,16 @@ pub(super) struct Viewer {
     /// Left, top, width and height (px) of the scrubber's track, measured by the last render, and the fraction under the finger.
     scrub_track: Rc<Cell<(f32, f32, f32, f32)>>,
     scrub_frac: f32,
-    /// Delete confirmation: when it started morphing and whether it is opening (else closing).
-    trash: Option<(f64, bool)>,
+    /// Delete confirmation morphing out of the trash button (bottom right).
+    trash: Morph,
+    /// The "..." menu morphing out of its button (top right), and whether the shown photo was archived when it opened.
+    menu: Morph,
+    menu_archived: bool,
+    /// Screen rect of the info panel as last drawn (raw touches inside it must not page or dismiss the viewer), its
+    /// scroll position, and whether the finger now down went down inside it.
+    info_rect: Rc<Cell<Option<(f32, f32, f32, f32)>>>,
+    info_scroll: ScrollHandle,
+    touch_in_panel: bool,
     editor: Option<Editor>,
 }
 
@@ -151,7 +165,12 @@ fn dismiss_scale(dy: f32, vh: f32) -> f32 {
 /// A glass button of the viewer. It occludes, otherwise a click on it also reaches the photo layer underneath and
 /// toggles the controls (info pill, share, trash).
 pub(crate) fn glass_button(id: &'static str, w: f32, k: f32) -> Stateful<Div> {
-    glass_div_with(VIEWER_TINT, 24., k, true).id(id).occlude().h(px(48.)).w(px(w)).flex().items_center().justify_center()
+    button::pill(id, surface(k), 48.).w(px(w)).occlude()
+}
+
+/// The dark glass of the viewer's controls, faded to `k`; it sits on the photo, so it samples the fresh frame.
+fn surface(k: f32) -> Surface {
+    Surface::new(VIEWER_TINT).faded(k).fresh()
 }
 
 /// How visible the viewer's controls are (1 = full) while the photo is dragged down at scale `ds`: gone shortly
@@ -186,6 +205,8 @@ impl Viewer {
         self.ds = 1.;
         self.video = None;
         self.details = None;
+        self.menu.reset();
+        self.info_scroll.set_offset(point(px(0.), px(0.)));
     }
 
     fn clamp_pan(&mut self) {
@@ -255,7 +276,12 @@ impl Immagine {
             video: None,
             scrub_track: Rc::new(Cell::new((0., 0., 1., 0.))),
             scrub_frac: 0.,
-            trash: None,
+            trash: Morph::default(),
+            menu: Morph::default(),
+            menu_archived: false,
+            info_rect: Rc::new(Cell::new(None)),
+            info_scroll: ScrollHandle::new(),
+            touch_in_panel: false,
             editor: None,
         });
         self.ensure_gestures(cx);
@@ -299,7 +325,7 @@ impl Immagine {
         if self.viewer.as_ref().is_some_and(|v| v.editor.is_some()) {
             return self.editor_down(xy(at), cx);
         }
-        if let Some(v) = self.viewer.as_mut().filter(|v| !v.closing && !v.pinching && v.trash.is_none()) {
+        if let Some(v) = self.viewer.as_mut().filter(|v| !v.closing && !v.pinching && !v.trash.active() && !v.menu.active()) {
             v.start = Some(xy(at));
             v.anchor = xy(at);
             v.last = xy(at);
@@ -473,14 +499,33 @@ impl Immagine {
     }
 
     fn pinch(&mut self, event: Pinch, cx: &mut Context<Self>) {
-        if self.settings.sheet.visible() {
-            return self.settings_pinch(event, cx);
-        }
-        if self.jobs.sheet.visible() {
-            return self.jobs_pinch(event, cx);
+        if let Some(sheet) = self.top_sheet() {
+            let pointer = match event {
+                Pinch::Down { y, .. } => Some(Pointer::Down(y)),
+                Pinch::Drag { y, .. } => Some(Pointer::Drag(y)),
+                Pinch::Up { y, .. } => Some(Pointer::Up((y >= 0.).then_some(y))),
+                _ => None,
+            };
+            if pointer.is_some_and(|p| sheet.pointer(p)) {
+                cx.notify();
+            }
+            return;
         }
         if self.viewer.is_none() {
             return self.grid_pinch(event, cx);
+        }
+        // Raw touches have no hit test: a finger that went down on the info panel (it scrolls by itself) or while the
+        // menu is open must not page, dismiss or zoom the photo behind.
+        if let Some(v) = self.viewer.as_mut() {
+            if let Pinch::Down { x, y } = event {
+                v.touch_in_panel = !v.closing && v.info_rect.get().is_some_and(|(l, t, w, h)| x >= l && x <= l + w && y >= t && y <= t + h);
+            }
+            if v.touch_in_panel || (v.menu.active() && v.start.is_none()) {
+                if matches!(event, Pinch::Up { .. }) {
+                    v.touch_in_panel = false;
+                }
+                return;
+            }
         }
         let width = self.viewer.as_ref().map(|v| v.viewport.get().0).unwrap_or(0.);
         match event {
@@ -545,33 +590,24 @@ impl Immagine {
     // MARK: - Delete
 
     fn open_trash_dialog(&mut self, cx: &mut Context<Self>) {
-        let Some(v) = self.viewer.as_mut().filter(|v| !v.closing && v.trash.is_none() && v.editor.is_none()) else { return };
-        v.trash = Some((now_ms(), true));
+        let Some(v) = self.viewer.as_mut().filter(|v| !v.closing && !v.trash.active() && !v.menu.active() && v.editor.is_none()) else { return };
+        v.trash.open(now_ms());
         cx.notify();
     }
 
     fn close_trash_dialog(&mut self, cx: &mut Context<Self>) {
         let Some(v) = self.viewer.as_mut() else { return };
-        let Some((_, true)) = v.trash else { return };
-        v.trash = Some((now_ms(), false));
+        if !v.trash.close(now_ms()) {
+            return;
+        }
         cx.notify();
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(DIALOG_MS as u64 + 40)).await;
-            this.update(cx, |t, cx| {
-                if let Some(v) = t.viewer.as_mut().filter(|v| matches!(v.trash, Some((_, false)))) {
-                    v.trash = None;
-                    cx.notify();
-                }
-            })
-            .ok();
-        })
-        .detach();
+        Morph::finish_after(cx, |t: &mut Self| t.viewer.as_mut().map(|v| &mut v.trash));
     }
 
     /// "Foto löschen": moves the shown photo to the server trash (applied locally at once, sent by the outbox).
     fn trash_current(&mut self, cx: &mut Context<Self>) {
         let Some(v) = self.viewer.as_mut().filter(|v| !v.closing) else { return };
-        v.trash = None;
+        v.trash.reset();
         let Some(id) = v.items.get(v.index).map(|i| i.id.clone()) else { return };
         let Some(engine) = self.engine.as_mut() else {
             self.status = "Bitte kurz warten, es wird synchronisiert.".into();
@@ -593,45 +629,170 @@ impl Immagine {
         cx.notify();
     }
 
+    // MARK: - "..." menu
+
+    fn open_more_menu(&mut self, cx: &mut Context<Self>) {
+        let archived = self.viewer_item_id().is_some_and(|id| self.engine.as_ref().is_some_and(|e| e.store().is_archived(&id)));
+        let Some(v) = self.viewer.as_mut().filter(|v| !v.closing && !v.trash.active() && v.editor.is_none()) else { return };
+        if v.menu.open(now_ms()) {
+            v.menu_archived = archived;
+            cx.notify();
+        }
+    }
+
+    fn close_more_menu(&mut self, cx: &mut Context<Self>) {
+        let Some(v) = self.viewer.as_mut() else { return };
+        if !v.menu.close(now_ms()) {
+            return;
+        }
+        cx.notify();
+        Morph::finish_after(cx, |t: &mut Self| t.viewer.as_mut().map(|v| &mut v.menu));
+    }
+
+    /// Removes the photo from the lists (timeline and viewer) and shows the next one; closes the viewer when it was
+    /// the last. Then syncs, which sends the queued op.
+    fn viewer_drop(&mut self, id: &str, cx: &mut Context<Self>) {
+        Rc::make_mut(&mut self.items).retain(|i| i.id != id);
+        let Some(v) = self.viewer.as_mut() else { return };
+        Rc::make_mut(&mut v.items).retain(|i| i.id != id);
+        if v.items.is_empty() {
+            self.sync(cx);
+            self.close_viewer(cx);
+            return;
+        }
+        v.index = v.index.min(v.items.len() - 1);
+        v.reset_view();
+        self.refresh_details(cx);
+        self.sync(cx);
+        cx.notify();
+    }
+
+    /// "Wiederherstellen" (the shown photo is in the Papierkorb): takes it out of the server trash, no confirmation.
+    /// Applied locally at once (timeline and special pages are rebuilt), sent by the outbox.
+    fn restore_current(&mut self, cx: &mut Context<Self>) {
+        let Some(v) = self.viewer.as_mut().filter(|v| !v.closing) else { return };
+        let Some(id) = v.items.get(v.index).map(|i| i.id.clone()) else { return };
+        let Some(engine) = self.engine.as_mut() else {
+            self.status = "Bitte kurz warten, es wird synchronisiert.".into();
+            cx.notify();
+            return;
+        };
+        engine.enqueue(&[AlbumOp::restore(vec![id.clone()])]);
+        {
+            use crate::logic::store::Store;
+            self.items = Rc::new(super::oldest_first(engine.store().fetch_timeline()));
+            self.albums.refresh(engine.store());
+        }
+        Rc::make_mut(&mut v.items).retain(|i| i.id != id);
+        if v.items.is_empty() {
+            self.sync(cx);
+            self.close_viewer(cx);
+            return;
+        }
+        v.index = v.index.min(v.items.len() - 1);
+        v.reset_view();
+        self.refresh_details(cx);
+        self.sync(cx);
+        cx.notify();
+    }
+
+    /// "Archivieren" / "Aus Archiv holen": applied locally at once (an archived photo leaves the Mediathek and the
+    /// viewer shows the next one, like after deleting), sent by the outbox.
+    pub(super) fn archive_current(&mut self, cx: &mut Context<Self>) {
+        let Some(v) = self.viewer.as_mut().filter(|v| !v.closing) else { return };
+        v.menu.reset();
+        let Some(id) = v.items.get(v.index).map(|i| i.id.clone()) else { return };
+        let Some(engine) = self.engine.as_mut() else {
+            self.status = "Bitte kurz warten, es wird synchronisiert.".into();
+            cx.notify();
+            return;
+        };
+        if engine.store().is_archived(&id) {
+            engine.enqueue(&[AlbumOp::unarchive(vec![id])]);
+            // The photo is back in the Mediathek; the viewer keeps showing it.
+            self.items = Rc::new(super::oldest_first(engine.store().fetch_timeline()));
+            self.albums.refresh(engine.store());
+            self.sync(cx);
+            cx.notify();
+        } else {
+            engine.enqueue(&[AlbumOp::archive(vec![id.clone()])]);
+            self.albums.refresh(engine.store());
+            self.viewer_drop(&id, cx);
+        }
+    }
+
+    /// The menu rows: download (or delete the stored copy), archive, add to album. Tapping a row closes the menu.
+    fn more_menu(&self, v: &Viewer, now: f64, vw: f32, top: f32, downloaded: bool, downloading: Option<f32>, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let open = v.menu.is_open();
+        let white: Rgba = rgb(0xffffff).into();
+        let row = |id: &'static str, icon: Canvas<()>, label: String| {
+            div()
+                .id(id)
+                .h(px(MENU_ROW))
+                .px(px(14.))
+                .rounded(px(16.))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(12.))
+                .text_size(px(17.))
+                .text_color(white)
+                .active(|s| s.opacity(0.6))
+                .child(div().w(px(28.)).flex_none().flex().justify_center().child(icon))
+                .child(label)
+        };
+        let (download_icon, download_label) = match (downloaded, downloading) {
+            (true, _) => (crate::components::icon::glyph(crate::components::icon::Glyph::Downloaded, 24., white), "Heruntergeladen".to_string()),
+            (false, Some(f)) => (crate::components::icon::progress_ring(f, 24., white), format!("Lädt … {} %", (f * 100.).round() as u32)),
+            _ => (crate::components::icon::glyph(crate::components::icon::Glyph::Download, 24., white), "Herunterladen".to_string()),
+        };
+        let mut download = row("viewer-menu-download", download_icon, download_label);
+        let mut archive = row(
+            "viewer-menu-archive",
+            crate::components::icon::glyph(crate::components::icon::Glyph::Archive, 24., white),
+            if v.menu_archived { "Aus Archiv holen" } else { "Archivieren" }.to_string(),
+        );
+        let mut album = row("viewer-menu-album", crate::components::icon::glyph(crate::components::icon::Glyph::AddToAlbum, 24., white), "Zu Album hinzufügen".to_string());
+        if open {
+            download = download.on_click(cx.listener(|this, _, _, cx| {
+                this.close_more_menu(cx);
+                this.download_current(cx);
+            }));
+            archive = archive.on_click(cx.listener(|this, _, _, cx| this.archive_current(cx)));
+            album = album.on_click(cx.listener(|this, _, _, cx| {
+                this.close_more_menu(cx);
+                if let Some(id) = this.viewer_item_id() {
+                    this.open_album_picker(vec![id], false, cx);
+                }
+            }));
+        }
+        let (cw, ch) = (MENU_WIDTH, 3. * MENU_ROW + 16.);
+        let content = div().size_full().p(px(8.)).flex().flex_col().child(download).child(archive).child(album).into_any_element();
+        // From the "..." button (44 pt, top right) to the menu box under the same corner.
+        let spec = morph::Spec {
+            id: "viewer-menu",
+            anchor: (vw - 16. - 44., top + 2., 44., 44.),
+            card: (vw - 16. - cw, top + 2., cw, ch),
+            tint: morph::DIALOG_TINT,
+            anchor_radius: 22.,
+            card_radius: 26.,
+        };
+        morph::overlay(v.menu, spec, now, window, content, |this: &mut Self, cx| this.close_more_menu(cx), cx)
+    }
+
     // MARK: - Share
 
     fn share_current(&mut self, cx: &mut Context<Self>) {
-        let (origin, token) = (self.origin.clone(), self.token.clone());
-        let Some(item) = self.viewer.as_ref().filter(|v| !v.closing).and_then(|v| v.items.get(v.index)) else { return };
-        if item.is_video() {
-            self.status = "Videos lassen sich hier noch nicht teilen.".into();
-            cx.notify();
-            return;
-        }
-        let id = item.id.clone();
-        self.status = "Bereite zum Teilen vor …".into();
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = async {
-                let client = ImmichClient::new(&origin, H::transport()).map_err(|e| e.to_string())?;
-                let bytes = client.original(&id, &token).await.map_err(|e| e.to_string())?;
-                let (name, mime) = if bytes.starts_with(&[0x89, b'P']) { ("foto.png", "image/png") } else { ("foto.jpg", "image/jpeg") };
-                H::share_file(name, mime, bytes).await
-            }
-            .await;
-            this.update(cx, |t, cx| {
-                t.status = match result {
-                    // Dismissing the share sheet is reported as an error too; nothing to tell the user then.
-                    Err(e) if !e.contains("AbortError") => e,
-                    _ => String::new(),
-                };
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        let Some(item) = self.viewer_item() else { return };
+        let from = ShareFrom::Viewer(item.id.clone());
+        self.share_assets(vec![item], from, cx);
     }
 
     // MARK: - Crop editor
 
     fn open_editor(&mut self, cx: &mut Context<Self>) {
         let (origin, token) = (self.origin.clone(), self.token.clone());
-        let Some(v) = self.viewer.as_mut().filter(|v| !v.closing && v.trash.is_none() && v.editor.is_none()) else { return };
+        let Some(v) = self.viewer.as_mut().filter(|v| !v.closing && !v.trash.active() && !v.menu.active() && v.editor.is_none()) else { return };
         let Some(item) = v.items.get(v.index).filter(|i| i.is_image()) else { return };
         let (id, ratio) = (item.id.clone(), item.ratio.unwrap_or(1.));
         v.reset_view();
@@ -857,14 +1018,14 @@ impl Immagine {
     fn video_controls(&self, player: &Rc<RefCell<Player>>, track: Rc<Cell<(f32, f32, f32, f32)>>, k: f32, bottom: f32, live: bool, cx: &mut Context<Self>) -> AnyElement {
         let white = Rgba { a: k, ..rgb(0xffffff).into() };
         let p = player.borrow();
-        let pill = glass_div_with(VIEWER_TINT, 26., k, true).id("viewer-controls").occlude().h(px(52.)).px_4().flex().flex_row().items_center().gap_3().text_color(white).text_size(px(13.));
+        let pill = button::pill("viewer-controls", surface(k), 52.).occlude().px_4().gap_3().text_color(white).text_size(px(13.));
         let body = match &p.status {
             Status::Loading => pill.justify_center().child("Lädt …"),
             Status::Failed(message) => pill.justify_center().child(message.clone()),
             Status::Ready => {
                 let fraction = (p.position_us as f32 / p.duration_us.max(1) as f32).clamp(0., 1.);
-                let mut button = div().id("viewer-play-pause").w(px(32.)).h(px(40.)).flex_none().flex().items_center().justify_center().child(super::icons::glyph(
-                    if p.is_playing() { super::icons::Glyph::Pause } else { super::icons::Glyph::Play },
+                let mut button = div().id("viewer-play-pause").w(px(32.)).h(px(40.)).flex_none().flex().items_center().justify_center().child(crate::components::icon::glyph(
+                    if p.is_playing() { crate::components::icon::Glyph::Pause } else { crate::components::icon::Glyph::Play },
                     24.,
                     white,
                 ));
@@ -873,7 +1034,7 @@ impl Immagine {
                 }
                 let bar = div().id("viewer-scrub").flex_1().h(px(40.)).relative().flex().items_center();
                 let bar = bar
-                    .child(canvas(move |bounds, _, _| track.set((bounds.origin.x.into(), bounds.origin.y.into(), bounds.size.width.into(), bounds.size.height.into())), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
+                    .child(measure::bounds(move |b| track.set(measure::rect(b))))
                     .child(div().w_full().h(px(4.)).rounded(px(2.)).bg(Rgba { a: 0.3 * k, ..rgb(0xffffff).into() }))
                     .child(div().absolute().left_0().h(px(4.)).w(relative(fraction)).rounded(px(2.)).bg(white))
                     .child(div().absolute().left(relative(fraction)).ml(px(-7.)).w(px(14.)).h(px(14.)).rounded(px(7.)).bg(white));
@@ -958,7 +1119,7 @@ impl Immagine {
             layer = layer.child(rect(hx, y - 1.5, 22., 3., 0xffffffff)).child(rect(x - 1.5, vy, 3., 22., 0xffffffff));
         }
         let chip = |id: &'static str, label: &str, color: Rgba| {
-            glass_div_with(VIEWER_TINT, 22., 1., true).id(id).h(px(44.)).px_5().flex().items_center().text_color(color).text_size(px(17.)).child(label.to_string())
+            button::chip(id, surface(1.), 44., 20., label.to_string()).text_color(color).text_size(px(17.))
         };
         let ready = ed.pixels.is_some() && !ed.saving;
         let cancel = chip("editor-cancel", "Abbrechen", rgb(0xffffff).into()).on_click(cx.listener(|this, _, _, cx| this.close_editor(cx)));
@@ -986,7 +1147,7 @@ impl Immagine {
             div()
                 .id(("editor-aspect", i))
                 .flex_none()
-                .child(glass_div_with(VIEWER_TINT, 20., 1., true).h(px(40.)).px_4().flex().items_center().text_color(color).text_size(px(15.)).child(a.title()))
+                .child(button::chip(("editor-aspect-chip", i), surface(1.), 40., 16., a.title()).text_color(color).text_size(px(15.)))
                 .on_click(cx.listener(move |this, _, _, cx| this.set_aspect(a, cx)))
         });
         layer
@@ -1108,21 +1269,13 @@ impl Immagine {
         let current_id = current.as_ref().map(|i| i.id.clone()).unwrap_or_default();
         let downloaded = self.downloads.ids.borrow().contains(&current_id);
         let downloading = self.downloads.busy.get(&current_id).copied();
+        let sharing = self.share_fraction(&ShareFrom::Viewer(current_id.clone()));
         let playing = v.video.is_some();
         let bottom = self.bottom.max(10.);
 
         let chip = |id: &'static str, label: String, color: Rgba| {
             let color = Rgba { a: color.a * k, ..color };
-            glass_div_with(VIEWER_TINT, 22., k, true)
-                .id(id)
-                .occlude()
-                .h(px(44.))
-                .px_5()
-                .flex()
-                .items_center()
-                .text_color(color)
-                .text_size(px(17.))
-                .child(label)
+            button::chip(id, surface(k), 44., 20., label).occlude().text_color(color).text_size(px(17.))
         };
         // Round or pill-shaped dark glass button of the top and bottom bars.
         let button = |id: &'static str, w: f32| glass_button(id, w, k);
@@ -1166,11 +1319,34 @@ impl Immagine {
             _ => String::new(),
         };
 
+        let info_max = (vh - (bottom + 126.) - (top + 54.)).max(120.);
+        if !(v.info && k > 0.) {
+            v.info_rect.set(None);
+        }
         let info_panel = (v.info && k > 0.).then(|| {
             let lines = match &v.details {
                 Some(asset) => Self::info_lines(asset),
                 None => vec![("", "Lädt …".to_string())],
             };
+            let rect = v.info_rect.clone();
+            // Lines scroll inside the panel, which never grows above the top bar. Values wrap (`min_w_0` lets the
+            // flex column shrink below its text; the line wrapper breaks words longer than the column).
+            let list = div()
+                .id("viewer-info-scroll")
+                .max_h(px(info_max - 32.))
+                .overflow_y_scroll()
+                .track_scroll(&v.info_scroll)
+                .flex()
+                .flex_col()
+                .gap_2()
+                .children(lines.into_iter().map(|(label, value)| {
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_3()
+                        .child(div().w(px(104.)).flex_none().text_size(px(13.)).text_color(rgba(0xffffffaa)).child(label))
+                        .child(div().flex_1().min_w_0().text_size(px(15.)).child(value))
+                }));
             glass_div_with(VIEWER_TINT, 24., k, true)
                 .id("viewer-info-panel")
                 .occlude()
@@ -1178,93 +1354,42 @@ impl Immagine {
                 .left(px(16.))
                 .right(px(16.))
                 .bottom(px(bottom + 126.))
+                .max_h(px(info_max))
                 .p_4()
-                .flex()
-                .flex_col()
-                .gap_2()
                 .text_color(rgb(0xffffff))
                 .opacity(k)
-                .children(lines.into_iter().map(|(label, value)| {
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap_3()
-                        .child(div().w(px(104.)).flex_none().text_size(px(13.)).text_color(rgba(0xffffffaa)).child(label))
-                        .child(div().flex_1().text_size(px(15.)).child(value))
-                }))
+                .child(
+                    measure::bounds(move |b| rect.set(Some(measure::rect(b)))),
+                )
+                .child(list)
         });
 
-        let dialog = v.trash.filter(|_| !closing).map(|(start, open)| {
-            let e = ((now - start) / DIALOG_MS).clamp(0., 1.) as f32;
-            if e < 1. {
-                window.request_animation_frame();
-            }
-            let e = 1. - (1. - e).powi(3);
-            let t = if open { e } else { 1. - e };
+        let dialog = if closing {
+            None
+        } else {
             let (bw, bh) = DIALOG_SIZE;
-            // From the trash button (48 pt, bottom right) to the confirmation box.
-            let (x0, y0, w0, h0) = (vw - 24. - 48., vh - bottom - 48., 48., 48.);
-            let (x1, y1) = (vw - 16. - bw, vh - bottom - bh);
-            let content = ((t - 0.55) / 0.45).clamp(0., 1.);
+            let open = v.trash.is_open();
             let noun = if is_video { "Video" } else { "Foto" };
-            let mut card = glass_div_with(DIALOG_TINT, lerp(24., 34., t), 1., true)
-                .id("viewer-dialog")
-                .occlude()
-                .absolute()
-                .left(px(lerp(x0, x1, t)))
-                .top(px(lerp(y0, y1, t)))
-                .w(px(lerp(w0, bw, t)))
-                .h(px(lerp(h0, bh, t)))
-                .overflow_hidden();
-            if content > 0. {
-                let mut confirm = div()
-                    .id("viewer-dialog-confirm")
-                    .h(px(54.))
-                    .rounded(px(27.))
-                    .bg(rgba(0xffffff1f))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(20.))
-                    .text_color(Rgba { a: content, ..rgb(0xff5a52).into() })
-                    .child(format!("{noun} löschen"));
-                if open {
-                    confirm = confirm.on_click(cx.listener(|this, _, _, cx| this.trash_current(cx)));
-                }
-                card = card.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .w(px(bw))
-                        .h(px(bh))
-                        .p(px(20.))
-                        .flex()
-                        .flex_col()
-                        .justify_between()
-                        .opacity(content)
-                        .child(div().text_size(px(17.)).text_color(rgb(0xffffff)).child(format!("Dieses {noun} wird aus der Mediathek gelöscht. Du kannst noch 30 Tage in „Zuletzt gelöscht“ darauf zugreifen.")))
-                        .child(confirm),
-                );
-            }
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .child(
-                    div()
-                        .id("viewer-dialog-scrim")
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full()
-                        .bg(rgba(0x000000ff))
-                        .opacity(0.35 * t)
-                        .on_click(cx.listener(|this, _, _, cx| this.close_trash_dialog(cx))),
-                )
-                .child(card)
-        });
+            let content = morph::confirm_content(
+                "viewer-dialog-confirm",
+                format!("Dieses {noun} wird aus der Mediathek gelöscht. Du kannst noch 30 Tage in „Zuletzt gelöscht“ darauf zugreifen."),
+                format!("{noun} löschen"),
+                rgb(0xffffff).into(),
+                rgb(0xff5a52).into(),
+                open.then(|| cx.listener(|this, _, _, cx| this.trash_current(cx))),
+            );
+            // From the trash button (48 pt, bottom right) to the confirmation box.
+            let spec = morph::Spec {
+                id: "viewer-dialog",
+                anchor: (vw - 24. - 48., vh - bottom - 48., 48., 48.),
+                card: (vw - 16. - bw, vh - bottom - bh, bw, bh),
+                tint: morph::DIALOG_TINT,
+                anchor_radius: 24.,
+                card_radius: 34.,
+            };
+            morph::overlay(v.trash, spec, now, window, content, |this: &mut Self, cx| this.close_trash_dialog(cx), cx)
+        };
+        let menu = if closing { None } else { self.more_menu(v, now, vw, top, downloaded, downloading, window, cx) };
         let editor = match (v.editor.as_ref(), current.as_ref()) {
             (Some(ed), Some(item)) if !closing => Some(self.editor_overlay(ed, item, vw, vh, cx)),
             _ => None,
@@ -1367,25 +1492,35 @@ impl Immagine {
                 .children(info_panel)
                 .children((k > 0.).then(|| {
                     let live = !closing;
-                    let mut fav = div().id("viewer-fav").w(px(52.)).h(px(48.)).flex().items_center().justify_center().child(heart(favorite, k));
-                    let mut info = div().id("viewer-info").w(px(52.)).h(px(48.)).flex().items_center().justify_center().child(super::icons::glyph(super::icons::Glyph::Info, 26., if v.info { Rgba { a: k, ..rgb(BLUE).into() } } else { white }));
+                    let mut fav = div().id("viewer-fav").w(px(52.)).h(px(48.)).flex().items_center().justify_center().child(crate::components::icon::heart(22., Rgba { a: k, ..if favorite { rgb(RED).into() } else { rgb(0xffffff).into() } }, favorite));
+                    let mut info = div().id("viewer-info").w(px(52.)).h(px(48.)).flex().items_center().justify_center().child(crate::components::icon::glyph(crate::components::icon::Glyph::Info, 26., if v.info { Rgba { a: k, ..rgb(BLUE).into() } } else { white }));
                     if live {
                         fav = fav.on_click(cx.listener(|this, _, _, cx| this.toggle_favorite(cx)));
                         info = info.on_click(cx.listener(|this, _, _, cx| this.toggle_info(cx)));
                     }
-                    let mut sliders = div().id("viewer-edit").w(px(52.)).h(px(48.)).flex().items_center().justify_center().child(super::icons::glyph(super::icons::Glyph::Sliders, 26., white));
+                    let mut sliders = div().id("viewer-edit").w(px(52.)).h(px(48.)).flex().items_center().justify_center().child(crate::components::icon::glyph(crate::components::icon::Glyph::Sliders, 26., white));
                     if live && !is_video {
                         sliders = sliders.on_click(cx.listener(|this, _, _, cx| this.open_editor(cx)));
                     }
                     let pill = button("viewer-pill", 164.).child(fav).child(info).child(sliders);
-                    let mut share = button("viewer-share", 48.).child(super::icons::glyph(super::icons::Glyph::Share, 26., white));
-                    let mut trash = button("viewer-trash", 48.).child(super::icons::glyph(super::icons::Glyph::Trash, 26., white));
+                    // While the file is on its way the button shows how far; a tap on it cancels.
+                    let mut share = button("viewer-share", 48.).child(match sharing {
+                        Some(fraction) => crate::components::icon::progress_ring(fraction, 26., white),
+                        None => crate::components::icon::glyph(crate::components::icon::Glyph::Share, 26., white),
+                    });
+                    // A photo in the Papierkorb is restored instead of deleted again.
+                    let in_trash = v.items.get(v.index).is_some_and(|i| i.is_trashed);
+                    let mut trash = button("viewer-trash", 48.).child(crate::components::icon::glyph(if in_trash { crate::components::icon::Glyph::Restore } else { crate::components::icon::Glyph::Trash }, 26., white));
                     if live {
                         share = share.on_click(cx.listener(|this, _, _, cx| this.share_current(cx)));
-                        trash = trash.on_click(cx.listener(|this, _, _, cx| this.open_trash_dialog(cx)));
+                        trash = if in_trash {
+                            trash.on_click(cx.listener(|this, _, _, cx| this.restore_current(cx)))
+                        } else {
+                            trash.on_click(cx.listener(|this, _, _, cx| this.open_trash_dialog(cx)))
+                        };
                     }
                     // While the confirmation morphs out of the trash button, the button itself is gone.
-                    let trash = if v.trash.is_some() { div().w(px(48.)).h(px(48.)).into_any_element() } else { trash.into_any_element() };
+                    let trash = if v.trash.active() { div().w(px(48.)).h(px(48.)).into_any_element() } else { trash.into_any_element() };
                     let bar = div()
                         .absolute()
                         .bottom(px(bottom))
@@ -1434,34 +1569,27 @@ impl Immagine {
                 }))
                 .children((k > 0.).then(|| {
                     let live = !closing;
-                    let mut back = button("viewer-done", 44.).h(px(44.)).active(|s| s.opacity(0.6)).child(super::icons::chevron(white));
+                    let mut back = button("viewer-done", 44.).h(px(44.)).active(|s| s.opacity(0.6)).child(crate::components::icon::chevron(crate::components::icon::Dir::Left, white));
                     if live {
                         back = back.on_click(cx.listener(|this, _, _, cx| this.close_viewer(cx)));
                     }
-                    let title = glass_div_with(VIEWER_TINT, 22., k, true)
+                    let title = button::pill("viewer-title", surface(k), 44.)
                         .w(px(160.))
-                        .h(px(44.))
-                        .flex()
                         .flex_col()
-                        .items_center()
-                        .justify_center()
                         .text_color(white)
                         .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(day))
                         .child(div().text_size(px(14.)).child(time));
-                    // Always occludes and always has a click handler (a no-op while busy or stored): without one the tap
-                    // falls through to the page and toggles the controls.
-                    let mut download = button("viewer-download", 44.).h(px(44.)).occlude();
-                    download = if downloaded {
-                        download.child(super::icons::glyph(super::icons::Glyph::Downloaded, 24., white))
-                    } else if let Some(fraction) = downloading {
-                        download.child(super::icons::progress_ring(fraction, 24., white))
-                    } else {
-                        download.active(|s| s.opacity(0.6)).child(super::icons::glyph(super::icons::Glyph::Download, 24., white))
-                    };
-                    if live {
-                        download = download.on_click(cx.listener(|this, _, _, cx| this.download_current(cx)));
+                    // The "..." button opens the menu (download, archive, album). While a download runs, its progress ring
+                    // circles the dots. The button itself is gone while the menu morphs out of it.
+                    let mut more = button("viewer-more", 44.).h(px(44.)).active(|s| s.opacity(0.6));
+                    if let Some(fraction) = downloading {
+                        more = more.child(div().absolute().size_full().flex().items_center().justify_center().child(crate::components::icon::progress_ring(fraction, 38., white)));
                     }
-                    let download = if downloaded { download.active(|s| s.opacity(0.6)) } else { download };
+                    more = more.child(crate::components::icon::glyph(crate::components::icon::Glyph::More, 24., white));
+                    if live {
+                        more = more.on_click(cx.listener(|this, _, _, cx| this.open_more_menu(cx)));
+                    }
+                    let download = if v.menu.active() { div().w(px(44.)).h(px(44.)).into_any_element() } else { more.into_any_element() };
                     div()
                         .absolute()
                         .top(px(top + 2.))
@@ -1476,36 +1604,11 @@ impl Immagine {
                         .child(download)
                 }))
                 .children(dialog)
+                .children(menu)
                 .children(editor)
                 .into_any_element(),
         )
     }
-}
-
-/// A heart, filled red when `filled`, otherwise a white outline (the font has no heart glyph).
-fn heart(filled: bool, k: f32) -> Canvas<()> {
-    canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let (x, y): (f32, f32) = (bounds.origin.x.into(), bounds.origin.y.into());
-            let scale = f32::from(bounds.size.width) / 24.;
-            let at = |px_: f32, py_: f32| point(px(x + px_ * scale), px(y + py_ * scale));
-            let mut b = if filled { PathBuilder::fill() } else { PathBuilder::stroke(px(1.8)) };
-            b.move_to(at(12., 21.5));
-            b.curve_to(at(2.2, 8.2), at(2., 14.5));
-            b.curve_to(at(7.2, 3.), at(2.5, 3.));
-            b.curve_to(at(12., 6.8), at(10.8, 3.));
-            b.curve_to(at(16.8, 3.), at(13.2, 3.));
-            b.curve_to(at(21.8, 8.2), at(21.5, 3.));
-            b.curve_to(at(12., 21.5), at(22., 14.5));
-            b.close();
-            if let Ok(path) = b.build() {
-                let color: Rgba = if filled { rgb(RED).into() } else { rgb(0xffffff).into() };
-                window.paint_path(path, Rgba { a: k, ..color });
-            }
-        },
-    )
-    .size(px(22.))
 }
 
 #[cfg(test)]
@@ -1546,5 +1649,78 @@ mod tests {
         assert_eq!((button.get(), photo.get()), (1, 0), "button action only");
         cx.simulate_click(point(px(300.), px(300.)), Modifiers::none());
         assert_eq!((button.get(), photo.get()), (1, 1), "photo tap still works");
+    }
+
+    fn photos(n: usize) -> Vec<TimelineItem> {
+        (0..n)
+            .map(|i| TimelineItem {
+                id: format!("a{i}"),
+                asset_type: "IMAGE".into(),
+                thumbhash: None,
+                ratio: Some(1.),
+                is_favorite: false,
+                is_trashed: false,
+                date_bucket: "2026-01-01".into(),
+                sort_date: None,
+                duration: None,
+            })
+            .collect()
+    }
+
+    /// The "..." button opens the menu without toggling the controls; a row runs its action and closes the menu.
+    #[::core::prelude::v1::test]
+    fn more_button_opens_the_menu_and_a_row_runs_its_action() {
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|w, cx| Immagine::new(0., 0., false, false, w, cx));
+        view.update(cx, |app, cx| {
+            app.screen = super::super::Screen::Timeline;
+            app.open_viewer(Rc::new(photos(3)), 1, cx);
+            // Settled: no open animation, so the chrome is fully visible.
+            app.viewer.as_mut().unwrap().chrome_at = 0.;
+        });
+        cx.run_until_parked();
+        let vw: f32 = cx.update(|w, _| w.viewport_size().width.into());
+        // The button: 44 pt, 16 pt from the right edge, 2 pt below the top inset (12 pt minimum).
+        cx.simulate_click(point(px(vw - 16. - 22.), px(12. + 2. + 22.)), Modifiers::none());
+        view.update(cx, |app, _| {
+            let v = app.viewer.as_ref().unwrap();
+            assert!(v.menu.is_open(), "the tap opened the menu");
+            assert!(!v.chrome_hidden, "and did not toggle the controls");
+        });
+        // Let the morph run to its end, then tap "Zu Album hinzufügen" (third row).
+        view.update(cx, |app, cx| {
+            let v = app.viewer.as_mut().unwrap();
+            v.menu.reset();
+            v.menu.open(now_ms() - 1000.);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let row_y = 12. + 2. + 8. + 2. * MENU_ROW + MENU_ROW / 2.;
+        cx.simulate_click(point(px(vw - 16. - MENU_WIDTH / 2.), px(row_y)), Modifiers::none());
+        view.update(cx, |app, _| {
+            assert!(app.picker.sheet.is_open(), "the album row opened the picker");
+            let v = app.viewer.as_ref().unwrap();
+            assert!(!v.menu.is_open() && !v.chrome_hidden, "menu closes, controls untouched");
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn tapping_the_menu_scrim_does_not_toggle_the_controls() {
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|w, cx| Immagine::new(0., 0., false, false, w, cx));
+        view.update(cx, |app, cx| {
+            app.screen = super::super::Screen::Timeline;
+            app.open_viewer(Rc::new(photos(3)), 1, cx);
+            let v = app.viewer.as_mut().unwrap();
+            v.chrome_at = 0.;
+            v.menu.open(now_ms() - 1000.);
+        });
+        cx.run_until_parked();
+        cx.simulate_click(point(px(40.), px(300.)), Modifiers::none());
+        view.update(cx, |app, _| {
+            let v = app.viewer.as_ref().unwrap();
+            assert!(!v.menu.is_open(), "the tap closed the menu");
+            assert!(!v.chrome_hidden, "and did not reach the photo");
+        });
     }
 }

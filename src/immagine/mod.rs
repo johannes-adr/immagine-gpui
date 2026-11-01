@@ -3,15 +3,18 @@
 //! Sync runs off a `SyncEngine` that is moved into the sync task and handed back when it ends, so the
 //! UI never borrows the store while it is being written. The UI reads a copy of the timeline.
 
+mod album_picker;
 mod albums;
 mod downloads;
+mod hidden_date;
 mod login;
 mod people;
 mod range_views;
 mod slider;
-mod icons;
 mod search;
 mod selection;
+mod share;
+mod scrollbar;
 mod jobs;
 mod settings;
 mod tab_bar;
@@ -21,6 +24,7 @@ mod video_player;
 mod viewer;
 
 use crate::components::rubber_band::{self, RubberBand};
+use crate::components::sheet::Sheet;
 use crate::components::fps::{fps_badge, FpsMeter};
 use crate::logic::client::{ClientError, ImmichClient};
 use crate::logic::models::timeline::TimelineItem;
@@ -141,11 +145,17 @@ pub(crate) struct Immagine {
     search: search::SearchState,
     settings: settings::SettingsState,
     jobs: jobs::JobsState,
+    picker: album_picker::PickerState,
     downloads: downloads::Downloads,
+    share: share::ShareState,
     select: selection::SelectState,
+    scrollbar: scrollbar::ScrollbarState,
 }
 
 /// The timeline is stored newest first; the grid reads oldest first, so the newest photos sit at the bottom.
+/// Corner radius of photo tiles with a caption or label (albums, years, months), lightly rounded like Apple Photos.
+const TILE_RADIUS: f32 = 10.;
+
 fn oldest_first(mut items: Vec<TimelineItem>) -> Vec<TimelineItem> {
     items.reverse();
     items
@@ -162,6 +172,7 @@ impl Immagine {
     }
 
     pub(crate) fn new(top: f32, bottom: f32, dark: bool, webgpu: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        crate::components::clock::install(crate::util::now_ms);
         let initial_server = H::origin();
         let server = cx.new(|cx| {
             let mut state = InputState::new(window, cx).placeholder("Server, z. B. https://immich.example.com");
@@ -274,8 +285,11 @@ impl Immagine {
             search: Default::default(),
             settings: Default::default(),
             jobs: Default::default(),
+            picker: Default::default(),
             downloads,
+            share: Default::default(),
             select: Default::default(),
+            scrollbar: Default::default(),
         };
         this.resume(cx);
         this.ensure_gestures(cx);
@@ -324,12 +338,15 @@ impl Immagine {
         .detach();
     }
 
-    fn install_engine(&mut self, store: MemoryStore, cx: &mut Context<Self>) {
+    fn install_engine(&mut self, mut store: MemoryStore, cx: &mut Context<Self>) {
+        // Before the first timeline build, so photos before the "show from" date never flash.
+        store.set_hidden_before(self.hidden_cutoff());
         match SyncEngine::new(store, H::transport(), H::clock(), &self.origin) {
             Ok(engine) => {
                 self.items = Rc::new(oldest_first(engine.store().fetch_timeline()));
                 self.albums.refresh(engine.store());
                 self.engine = Some(engine);
+                self.hidden_recount();
                 self.screen = Screen::Timeline;
             }
             Err(e) => {
@@ -402,6 +419,7 @@ impl Immagine {
         self.select_end();
         self.settings.sheet.close();
         self.jobs.reset();
+        self.picker.sheet.close();
         self.tab = 0;
         self.screen = Screen::Login;
         self.downloads.ids.borrow_mut().clear();
@@ -459,6 +477,8 @@ impl Immagine {
                 if let Some(items) = items {
                     t.items = Rc::new(oldest_first(items));
                 }
+                // The "show from" date may have changed while the engine was away; also refreshes the hidden count.
+                t.hidden_after_sync();
                 cx.notify();
             });
             if let Some(bytes) = snapshot {
@@ -489,10 +509,15 @@ impl TileRect {
 }
 
 impl Immagine {
+    /// The sheet that is shown, topmost first (the album picker covers the viewer, settings and jobs the page).
+    pub(super) fn top_sheet(&self) -> Option<&Sheet> {
+        [&self.picker.sheet, &self.settings.sheet, &self.jobs.sheet].into_iter().find(|s| s.visible())
+    }
+
     /// The scroll handle of whatever scrolls on screen now, for the rubber band; `None` while the viewer is open
     /// or on screens without a scroll view.
     fn active_scroll(&self) -> Option<ScrollHandle> {
-        if self.screen != Screen::Timeline || self.viewer.as_ref().is_some_and(|v| !v.closing) || self.settings.sheet.visible() || self.jobs.sheet.visible() {
+        if self.screen != Screen::Timeline || self.viewer.as_ref().is_some_and(|v| !v.closing) || self.top_sheet().is_some() {
             return None;
         }
         let list = |h: &UniformListScrollHandle| h.0.borrow().base_handle.clone();
@@ -528,13 +553,13 @@ impl Render for Immagine {
         }
         self.rubber.tick(window);
         self.settings.sheet.tick(window);
-        self.settings.rubber.tick(window);
         self.jobs.sheet.tick(window);
-        self.jobs.rubber.tick(window);
+        self.picker.sheet.tick(window);
         self.grid_default(window.viewport_size().width.into());
         self.grid_tick(window);
         self.select_check();
         self.sel_tick(window);
+        self.sb_check();
         let background = if self.dark { rgb(0x000000) } else { rgb(0xffffff) };
         let content = match self.screen {
             Screen::Loading => div().into_any_element(),
@@ -562,10 +587,12 @@ impl Render for Immagine {
                 self.bars(&p, window, cx)
             }
         });
+        let scrollbar = if self.screen == Screen::Timeline { self.sb_layer(&p, cx) } else { None };
         let viewer = if self.screen == Screen::Timeline { self.viewer_overlay(window, cx) } else { None };
-        let select_overlay = if self.screen == Screen::Timeline && self.select.on { self.sel_overlay(&p, cx) } else { None };
+        let select_overlay = if self.screen == Screen::Timeline && self.select.on { self.sel_overlay(window, cx) } else { None };
         let settings = if self.screen == Screen::Timeline { self.settings_overlay(&p, window, cx) } else { None };
         let jobs = if self.screen == Screen::Timeline { self.jobs_overlay(&p, window, cx) } else { None };
+        let picker = if self.screen == Screen::Timeline { self.picker_overlay(&p, window, cx) } else { None };
         div()
             .size_full()
             .relative()
@@ -573,8 +600,10 @@ impl Render for Immagine {
             .bg(background)
             .text_color(p.label)
             .child(content)
+            .children(scrollbar)
             .child(self.grid_input(cx))
             .child(self.sel_input(cx))
+            .child(self.sb_input(cx))
             .child(rubber_band::input(cx.weak_entity(), |this, dy, phase, window| {
                 // While the grid zooms, the first finger of the pinch must not also scroll the list or start a fling.
                 if this.grid_zooming() {
@@ -582,19 +611,19 @@ impl Render for Immagine {
                     return (true, false);
                 }
                 // Swipe-to-select: the finger paints, the list must not scroll along (it auto-scrolls itself).
-                if this.select.painting() {
+                if this.select.painting() || this.scrollbar.dragging() {
                     window.cancel_touch_momentum();
                     return (true, false);
+                }
+                if this.picker.sheet.visible() {
+                    return this.picker.sheet.scroll_event(dy, phase, window);
                 }
                 if this.select.overlay_open() {
                     return (false, false);
                 }
-                // The settings sheet covers the page: its list takes the gesture, with its own band.
-                if this.settings.sheet.visible() {
-                    return this.settings_scroll_event(dy, phase, window);
-                }
-                if this.jobs.sheet.visible() {
-                    return this.jobs_scroll_event(dy, phase, window);
+                // A sheet covers the page: its list takes the gesture, with its own band.
+                if let Some(sheet) = this.top_sheet() {
+                    return sheet.scroll_event(dy, phase, window);
                 }
                 let scroll = this.active_scroll();
                 this.rubber.event(dy, phase, scroll.as_ref(), window)
@@ -608,6 +637,7 @@ impl Render for Immagine {
             .children(select_overlay)
             .children(settings)
             .children(jobs)
+            .children(picker)
             .children(self.debug.then(|| fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, H::renderer_name(self.webgpu))))
     }
 }

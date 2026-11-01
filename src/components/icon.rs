@@ -1,42 +1,54 @@
-//! Small vector icons drawn as paths (the bundled font has no chevron or heart glyphs).
+//! Vector icons drawn as paths (the bundled fonts have no chevron, heart or gear glyphs), all stroked or filled
+//! in a color passed by the caller, so one set serves any theme. `glyph` draws the `Glyph` set on a 24-unit grid
+//! scaled to its size; the others are single shapes.
 
-use crate::components::glass::glass_div_faded;
 use gpui_kit::*;
 
-/// A "<" chevron, `color` stroked.
-pub(super) fn chevron(color: Rgba) -> Canvas<()> {
-    canvas(
+/// Direction of a `chevron`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Dir {
+    /// "<", the back arrow (22 x 22).
+    Left,
+    /// "^" (22 x 13).
+    Up,
+    /// "v" (22 x 13).
+    Down,
+}
+
+/// A chevron, `color` stroked.
+pub(crate) fn chevron(dir: Dir, color: Rgba) -> Canvas<()> {
+    let c = canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
             let (x, y): (f32, f32) = (bounds.origin.x.into(), bounds.origin.y.into());
-            let k = f32::from(bounds.size.width) / 24.;
-            let at = |px_: f32, py_: f32| point(px(x + px_ * k), px(y + py_ * k));
+            let (w, h): (f32, f32) = (bounds.size.width.into(), bounds.size.height.into());
             let mut b = PathBuilder::stroke(px(2.4));
-            b.move_to(at(15., 4.));
-            b.line_to(at(7., 12.));
-            b.line_to(at(15., 20.));
+            match dir {
+                Dir::Left => {
+                    let k = w / 24.;
+                    let at = |px_: f32, py_: f32| point(px(x + px_ * k), px(y + py_ * k));
+                    b.move_to(at(15., 4.));
+                    b.line_to(at(7., 12.));
+                    b.line_to(at(15., 20.));
+                }
+                Dir::Up | Dir::Down => {
+                    let (tip, base) = if dir == Dir::Up { (y + h * 0.2, y + h * 0.85) } else { (y + h * 0.85, y + h * 0.2) };
+                    b.move_to(point(px(x + w * 0.1), px(base)));
+                    b.line_to(point(px(x + w * 0.5), px(tip)));
+                    b.line_to(point(px(x + w * 0.9), px(base)));
+                }
+            }
             if let Ok(path) = b.build() {
                 window.paint_path(path, color);
             }
         },
-    )
-    .size(px(22.))
+    );
+    if dir == Dir::Left { c.size(px(22.)) } else { c.w(px(22.)).h(px(13.)) }
 }
 
-/// A round glass back button with a chevron.
-pub(super) fn back_chip(tint: Hsla, id: &'static str, color: Rgba) -> Stateful<Div> {
-    back_chip_faded(tint, id, color, 1.)
-}
-
-/// `back_chip` shown at `k` (1 = full, 0 = invisible).
-pub(super) fn back_chip_faded(tint: Hsla, id: &'static str, color: Rgba, k: f32) -> Stateful<Div> {
-    let color = Rgba { a: color.a * k, ..color };
-    glass_div_faded(tint, 18., k).id(id).h(px(36.)).w(px(48.)).flex().items_center().justify_center().active(|s| s.opacity(0.6)).child(chevron(color))
-}
-
-/// Glyphs of the photo viewer's bars (Apple Photos look), drawn as strokes on a 24-unit grid.
+/// Glyphs of the app bars (Apple Photos look), drawn as strokes on a 24-unit grid.
 #[derive(Clone, Copy)]
-pub(super) enum Glyph {
+pub(crate) enum Glyph {
     Share,
     Info,
     Sliders,
@@ -50,12 +62,18 @@ pub(super) enum Glyph {
     Pause,
     AddToAlbum,
     Check,
+    /// Counter-clockwise arrow ("Wiederherstellen").
+    Restore,
     /// The jobs list: arrow into a tray beside list lines.
     Jobs,
+    /// Three dots in a row ("..." menu).
+    More,
+    /// A box with a lid (archive).
+    Archive,
 }
 
 /// A `Glyph` of `size` px, stroked in `color`.
-pub(super) fn glyph(kind: Glyph, size: f32, color: Rgba) -> Canvas<()> {
+pub(crate) fn glyph(kind: Glyph, size: f32, color: Rgba) -> Canvas<()> {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
@@ -159,6 +177,20 @@ pub(super) fn glyph(kind: Glyph, size: f32, color: Rgba) -> Canvas<()> {
                     stroke(&[(18., 9.5), (18., 20.)], window);
                     stroke(&[(15., 17.), (18., 20.), (21., 17.)], window);
                 }
+                Glyph::More => {
+                    for cx_ in [5., 12., 19.] {
+                        fill(&circle(cx_, 12., 1.9), window);
+                    }
+                }
+                Glyph::Archive => {
+                    stroke(&[(3., 4.5), (21., 4.5), (21., 9.), (3., 9.), (3., 4.5)], window);
+                    stroke(&[(4.5, 9.), (4.5, 20.), (19.5, 20.), (19.5, 9.)], window);
+                    stroke(&[(9.5, 13.5), (14.5, 13.5)], window);
+                }
+                Glyph::Restore => {
+                    stroke(&[(5., 12.), (5.6, 8.6), (7.8, 6.), (11., 4.8), (14.4, 5.4), (17.2, 7.6), (18.6, 10.8), (18.4, 14.2), (16.6, 17.), (13.6, 18.8), (10.4, 18.9)], window);
+                    stroke(&[(5., 4.5), (5., 9.5), (10., 9.5)], window);
+                }
                 Glyph::Check => stroke(&[(5., 12.5), (10., 17.5), (19., 7.)], window),
                 Glyph::Trash => {
                     stroke(&[(3.5, 6.), (20.5, 6.)], window);
@@ -173,15 +205,15 @@ pub(super) fn glyph(kind: Glyph, size: f32, color: Rgba) -> Canvas<()> {
     .size(px(size))
 }
 
-/// A small filled heart (grid badge).
-pub(super) fn heart_badge(size: f32, color: Rgba) -> Canvas<()> {
+/// A heart, filled with `color` or (not `filled`) outlined in it, `size` px.
+pub(crate) fn heart(size: f32, color: Rgba, filled: bool) -> Canvas<()> {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
             let (x, y): (f32, f32) = (bounds.origin.x.into(), bounds.origin.y.into());
             let k = f32::from(bounds.size.width) / 24.;
             let at = |px_: f32, py_: f32| point(px(x + px_ * k), px(y + py_ * k));
-            let mut b = PathBuilder::fill();
+            let mut b = if filled { PathBuilder::fill() } else { PathBuilder::stroke(px(1.8)) };
             b.move_to(at(12., 21.5));
             b.curve_to(at(2.2, 8.2), at(2., 14.5));
             b.curve_to(at(7.2, 3.), at(2.5, 3.));
@@ -199,7 +231,7 @@ pub(super) fn heart_badge(size: f32, color: Rgba) -> Canvas<()> {
 }
 
 /// A progress ring: a faint track and an arc from the top, clockwise, for `fraction` (0..1) of the circle.
-pub(super) fn progress_ring(fraction: f32, size: f32, color: Rgba) -> Canvas<()> {
+pub(crate) fn progress_ring(fraction: f32, size: f32, color: Rgba) -> Canvas<()> {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {

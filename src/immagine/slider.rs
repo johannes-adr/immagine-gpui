@@ -5,7 +5,8 @@
 
 use crate::components::glass::glass_div_faded;
 use crate::theme::Palette;
-use crate::util::{lerp, now_ms, spring_out};
+use crate::components::ease::{lerp, spring_out};
+use crate::util::now_ms;
 use gpui_kit::*;
 use std::time::Duration;
 

@@ -12,7 +12,7 @@ const KICK_MS: f64 = 150.;
 
 /// Phase of a touch scroll gesture (cancelled counts as ended).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Phase {
+pub(super) enum Phase {
     Started,
     Moved,
     Ended,
@@ -32,7 +32,7 @@ enum Mode {
 
 /// What the UI has to do after an event.
 #[derive(Clone, Copy, Default, Debug)]
-pub struct Reaction {
+pub(super) struct Reaction {
     /// The event was used up by the band; the list must not see it.
     pub used: bool,
     /// Stop the synthesized momentum of the current fling.
@@ -43,7 +43,7 @@ pub struct Reaction {
 
 /// Offset past the end (positive pulls the content down) and what drives it.
 #[derive(Clone, Copy, Default)]
-pub struct RubberBand {
+pub(super) struct RubberBand {
     value: f32,
     down: bool,
     mode: Mode,

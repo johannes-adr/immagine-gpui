@@ -1,9 +1,9 @@
 use super::PRESS_GROW;
 use crate::app::Todos;
 use crate::components::glass::glass_div;
-use crate::components::photo::photo;
+use crate::app::photo::photo;
 use crate::theme::GLASS_TINT_DARK;
-use crate::util::{anim, lerp};
+use crate::components::ease::{anim, lerp};
 use gpui_kit::*;
 use std::time::Duration;
 

@@ -92,6 +92,12 @@ impl Rect {
     }
 }
 
+/// Empty cells before the first photo of the timeline: the short row sits at the oldest photos, at the top, so the
+/// rows at the newest photos, where the timeline opens, are always full.
+pub fn head_gap(count: usize, columns: usize) -> usize {
+    if columns == 0 { 0 } else { (columns - count % columns) % columns }
+}
+
 /// Zoom in progress: the grid goes from `from` to `to` columns.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Zoom {
@@ -289,6 +295,17 @@ mod tests {
 
     fn assert_near(a: f64, b: f64, accuracy: f64) {
         assert!((a - b).abs() <= accuracy, "{a} != {b} (accuracy {accuracy})");
+    }
+
+    #[test]
+    fn the_short_row_is_the_first_one() {
+        assert_eq!(head_gap(9, 3), 0);
+        assert_eq!(head_gap(10, 3), 2);
+        assert_eq!(head_gap(11, 3), 1);
+        assert_eq!(head_gap(2, 5), 3);
+        assert_eq!(head_gap(0, 3), 0);
+        assert_eq!(head_gap(7, 1), 0);
+        assert_eq!(head_gap(7, 0), 0);
     }
 
     #[test]

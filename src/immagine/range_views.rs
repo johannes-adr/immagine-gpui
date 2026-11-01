@@ -7,12 +7,13 @@ use super::{thumbs, Immagine};
 use crate::logic::models::timeline::TimelineItem;
 use crate::logic::range_groups::{group, Groups};
 use crate::theme::Palette;
+use crate::components::tap;
 use gpui_kit::*;
 use std::rc::Rc;
 
 const SIDE: f32 = 16.;
 const GAP: f32 = 10.;
-const RADIUS: f32 = 16.;
+const RADIUS: f32 = super::TILE_RADIUS;
 const MONTHS: [&str; 12] = ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni", "Juli", "Aug.", "Sept.", "Okt.", "Nov.", "Dez."];
 
 /// One rounded photo card with `label` at its top left.
@@ -42,8 +43,11 @@ fn card(
         Some(w) => base.w(px(w)),
         None => base.w_full(),
     };
-    base.children(picture.map(|image| img(image).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Cover)))
-        .child(div().absolute().top_0().left_0().w_full().h(px(label_size * 3.)).bg(linear_gradient(
+    #[cfg(test)]
+    let base = base.debug_selector(|| format!("card-{}", item.id));
+    // `overflow_hidden` clips to a rectangle only: the picture and the gradient need the corners themselves.
+    base.children(picture.map(|image| img(image).absolute().top_0().left_0().size_full().rounded(px(RADIUS)).object_fit(ObjectFit::Cover)))
+        .child(div().absolute().top_0().left_0().w_full().h(px(label_size * 3.)).rounded_t(px(RADIUS)).bg(linear_gradient(
             180.,
             linear_color_stop(rgba(0x00000066), 0.),
             linear_color_stop(rgba(0x00000000), 1.),
@@ -89,12 +93,7 @@ impl Immagine {
             let view = view.clone();
             let first_month = year.first_month;
             let c = card(("year", row), &items[year.cover], year.year.to_string(), (None, card_h), 30., &store, &origin, placeholder, scale, cx).on_click(
-                move |_, window, cx| {
-                    if window.tap_caught_fling() {
-                        return;
-                    }
-                    view.update(cx, |this, cx| this.show_months_at(first_month, cx)).ok();
-                },
+                tap::weak(view, move |this, cx| this.show_months_at(first_month, cx)),
             );
             div().h(px(card_h + GAP)).px(px(SIDE)).pb(px(GAP)).child(c).into_any_element()
         })
@@ -121,16 +120,13 @@ impl Immagine {
                 let first = day.first;
                 let (size, text) = if i == 0 { ((None, big_h), 30.) } else { ((Some(small), small), 22.) };
                 let c = card(("day", row * 8 + i), &items[first], day.day.to_string(), size, text, &store, &origin, placeholder, scale, cx);
-                c.on_click(move |_, window, cx| {
-                    if window.tap_caught_fling() {
-                        return;
-                    }
-                    view.update(cx, |this, cx| this.show_all_at(first, cx)).ok();
-                })
+                c.on_click(tap::weak(view, move |this, cx| this.show_all_at(first, cx)))
             });
             let big = cards.next();
             let heading = format!("{} {}", MONTHS[(month.month - 1) as usize], month.year);
+            // `w_full`: without it the row is as wide as its content and the big card's `w_full` resolves to 0.
             div()
+                .w_full()
                 .h(px(row_h))
                 .px(px(SIDE))
                 .flex()
@@ -206,5 +202,34 @@ impl Immagine {
         self.timeline_jump.set(Some(index));
         self.scroll_settle.set(crate::util::now_ms());
         self.select_range(2, cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ::gpui::TestAppContext;
+
+    fn it(id: &str, date: &str) -> TimelineItem {
+        TimelineItem { id: id.into(), asset_type: "IMAGE".into(), thumbhash: None, ratio: Some(1.), is_favorite: false, is_trashed: false, date_bucket: date.into(), sort_date: None, duration: None }
+    }
+
+    #[::core::prelude::v1::test]
+    fn month_row_cards_have_size() {
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|w, cx| Immagine::new(0., 0., false, false, w, cx));
+        view.update(cx, |app, cx| {
+            app.screen = super::super::Screen::Timeline;
+            app.range_mode = 1;
+            app.items = Rc::new(vec![it("a", "2026-09-09"), it("b", "2026-09-13"), it("b2", "2026-09-13"), it("c", "2026-09-15")]);
+            cx.notify();
+        });
+        cx.update(|w, _| w.refresh());
+        let vw: f32 = cx.update(|w, _| w.viewport_size().width.into());
+        // The busiest day ("b") gets the big card: it must span the row, not collapse to the width of its (absolute) content.
+        let big = cx.debug_bounds("card-b").expect("big card painted");
+        assert_eq!(f32::from(big.size.width), vw - 2. * SIDE);
+        let small = cx.debug_bounds("card-a").expect("small card painted");
+        assert!(f32::from(small.size.width) > 0.);
     }
 }
