@@ -9,4 +9,5 @@ pub(crate) mod morph;
 pub(crate) mod rubber_band;
 pub(crate) mod scrim;
 pub(crate) mod sheet;
+pub(crate) mod tap;
 pub(crate) mod theme;

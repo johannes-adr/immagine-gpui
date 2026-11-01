@@ -7,6 +7,7 @@ use super::{thumbs, Immagine};
 use crate::logic::models::timeline::TimelineItem;
 use crate::logic::range_groups::{group, Groups};
 use crate::theme::Palette;
+use crate::components::tap;
 use gpui_kit::*;
 use std::rc::Rc;
 
@@ -89,12 +90,7 @@ impl Immagine {
             let view = view.clone();
             let first_month = year.first_month;
             let c = card(("year", row), &items[year.cover], year.year.to_string(), (None, card_h), 30., &store, &origin, placeholder, scale, cx).on_click(
-                move |_, window, cx| {
-                    if window.tap_caught_fling() {
-                        return;
-                    }
-                    view.update(cx, |this, cx| this.show_months_at(first_month, cx)).ok();
-                },
+                tap::weak(view, move |this, cx| this.show_months_at(first_month, cx)),
             );
             div().h(px(card_h + GAP)).px(px(SIDE)).pb(px(GAP)).child(c).into_any_element()
         })
@@ -121,12 +117,7 @@ impl Immagine {
                 let first = day.first;
                 let (size, text) = if i == 0 { ((None, big_h), 30.) } else { ((Some(small), small), 22.) };
                 let c = card(("day", row * 8 + i), &items[first], day.day.to_string(), size, text, &store, &origin, placeholder, scale, cx);
-                c.on_click(move |_, window, cx| {
-                    if window.tap_caught_fling() {
-                        return;
-                    }
-                    view.update(cx, |this, cx| this.show_all_at(first, cx)).ok();
-                })
+                c.on_click(tap::weak(view, move |this, cx| this.show_all_at(first, cx)))
             });
             let big = cards.next();
             let heading = format!("{} {}", MONTHS[(month.month - 1) as usize], month.year);

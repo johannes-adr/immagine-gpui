@@ -8,6 +8,7 @@ use crate::logic::models::person::{PeopleOrder, Person};
 use crate::logic::models::timeline::TimelineItem;
 use crate::theme::{Palette, BLUE, RED};
 use crate::host::{Current as H, Host};
+use crate::components::tap;
 use gpui_kit::*;
 use std::rc::Rc;
 
@@ -276,12 +277,7 @@ impl Immagine {
                                             .text_color(label)
                                             .child(name),
                                     )
-                                    .on_click(move |_, window, cx| {
-                                        if window.tap_caught_fling() {
-                                            return;
-                                        }
-                                        view.update(cx, |this, cx| this.open_person(target.clone(), cx)).ok();
-                                    })
+                                    .on_click(tap::weak(view, move |this, cx| this.open_person(target.clone(), cx)))
                             })
                             .collect::<Vec<_>>();
                         div().h(px(row_h)).px(px(PAD)).flex().gap(px(GAP)).children(tiles).into_any_element()

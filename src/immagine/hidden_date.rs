@@ -13,6 +13,7 @@ use crate::logic::hidden_before::{Field, Ymd, MONTHS};
 use crate::logic::ports::Clock;
 use crate::logic::store::Store;
 use crate::theme::{Palette, BLUE};
+use crate::components::tap;
 use gpui_kit::*;
 use std::rc::Rc;
 
@@ -147,10 +148,7 @@ impl Immagine {
                     .active(|s| s.opacity(0.6))
                     .child(div().child("Fotos anzeigen ab"))
                     .child(div().text_color(if h.open { rgb(BLUE) } else { p.secondary }).child(value))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if window.tap_caught_fling() {
-                            return;
-                        }
+                    .on_click(tap::listener(cx, |this, cx| {
                         let h = &mut this.settings.hidden;
                         h.open = !h.open;
                         if h.open {
@@ -175,10 +173,7 @@ impl Immagine {
                         .justify_center()
                         .active(|s| s.opacity(0.4))
                         .child(crate::components::icon::chevron(if up { crate::components::icon::Dir::Up } else { crate::components::icon::Dir::Down }, rgb(BLUE)))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if window.tap_caught_fling() {
-                                return;
-                            }
+                        .on_click(tap::listener(cx, move |this, cx| {
                             let h = &mut this.settings.hidden;
                             h.draft = h.draft.stepped(field, delta, today());
                             cx.notify();
@@ -209,10 +204,7 @@ impl Immagine {
                         .text_size(px(15.))
                         .active(|s| s.opacity(0.6))
                         .child(label)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if window.tap_caught_fling() {
-                                return;
-                            }
+                        .on_click(tap::listener(cx, move |this, cx| {
                             this.settings.hidden.draft = Ymd::years_ago(today(), years);
                             cx.notify();
                         })),
@@ -253,16 +245,12 @@ impl Immagine {
                     div()
                         .flex()
                         .flex_row()
-                        .child(button("hidden-clear", "Alle anzeigen", rgb(BLUE), false).on_click(cx.listener(|this, _, window, cx| {
-                            if !window.tap_caught_fling() {
+                        .child(button("hidden-clear", "Alle anzeigen", rgb(BLUE), false).on_click(tap::listener(cx, |this, cx| {
                                 this.apply_hidden_draft(None, cx);
-                            }
                         })))
-                        .child(button("hidden-apply", "Übernehmen", rgb(BLUE), true).on_click(cx.listener(move |this, _, window, cx| {
-                            if !window.tap_caught_fling() {
+                        .child(button("hidden-apply", "Übernehmen", rgb(BLUE), true).on_click(tap::listener(cx, move |this, cx| {
                                 let date = Ymd::clamped(this.settings.hidden.draft.year, this.settings.hidden.draft.month as i64, this.settings.hidden.draft.day as i64, today());
                                 this.apply_hidden_draft(Some(date), cx);
-                            }
                         }))),
                 );
             rows.push(separator(div()).child(picker));

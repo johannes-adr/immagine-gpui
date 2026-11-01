@@ -11,6 +11,7 @@ use crate::components::sheet::{self, Sheet};
 use crate::logic::models::album_op::AlbumOp;
 use crate::logic::models::album_tree::AlbumPath;
 use crate::theme::Palette;
+use crate::components::tap;
 use gpui_kit::*;
 
 /// Height of one album row (tall enough to tap).
@@ -98,10 +99,8 @@ impl Immagine {
             if i + 1 == count {
                 row = row.rounded_b(px(14.));
             }
-            list = list.child(row.on_click(cx.listener(move |this, _, window, cx| {
-                if !window.tap_caught_fling() {
+            list = list.child(row.on_click(tap::listener(cx, move |this, cx| {
                     this.pick_album(&id, cx)
-                }
             })));
         }
         Some(sheet::overlay(

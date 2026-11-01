@@ -9,6 +9,7 @@ use crate::theme::Palette;
 use crate::logic::models::timeline::TimelineItem;
 use crate::logic::range_groups::{format_range, month_label, parse_bucket};
 use gpui_kit::prelude::FluentBuilder;
+use crate::components::tap;
 use gpui_kit::*;
 use std::rc::Rc;
 
@@ -392,22 +393,16 @@ impl Immagine {
                                 .absolute()
                                 .size_full(),
                             )
-                            .on_click(move |_, window, cx| {
-                                if window.tap_caught_fling() {
+                            .on_click(tap::weak(view, move |this, cx| {
+                                if this.sb_swallow_click() {
                                     return;
                                 }
-                                view.update(cx, |this, cx| {
-                                    if this.sb_swallow_click() {
-                                        return;
-                                    }
-                                    if selecting {
-                                        this.select_tap(&tap_id, cx)
-                                    } else {
-                                        this.open_viewer(all.clone(), idx, cx)
-                                    }
-                                })
-                                .ok();
-                            })
+                                if selecting {
+                                    this.select_tap(&tap_id, cx)
+                                } else {
+                                    this.open_viewer(all.clone(), idx, cx)
+                                }
+                            }))
                     });
                     // At the smallest cells a label names the month that starts in this row.
                     let label = (timeline && cols_f >= MONTH_LABEL_COLS as f32 - 0.5)

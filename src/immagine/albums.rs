@@ -10,6 +10,7 @@ use crate::logic::models::album_tree::{AlbumPath, AlbumTree};
 use crate::logic::models::timeline::TimelineItem;
 use crate::logic::store::MemoryStore;
 use crate::theme::{Palette, BLUE};
+use crate::components::tap;
 use gpui_kit::*;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
@@ -466,10 +467,8 @@ impl Immagine {
                     .active(|s| s.opacity(0.6))
                     .child(cell)
                     .child(caption(p, &AlbumPath::leaf_of_album_name(&album.album_name), count_label(count, "Foto", "Fotos")))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if !window.tap_caught_fling() {
+                    .on_click(tap::listener(cx, move |this, cx| {
                             this.open_album(&id, cx)
-                        }
                     }))
                     .into_any_element(),
             );
@@ -483,10 +482,8 @@ impl Immagine {
                     // Invisible but real: an empty slot with a click handler and no feedback, no cover requested.
                     extras.push(
                         hidden_slot(i, tile)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                if !window.tap_caught_fling() {
+                            .on_click(tap::listener(cx, move |this, cx| {
                                     this.open_special(special, cx)
-                                }
                             }))
                             .into_any_element(),
                     );
@@ -515,10 +512,8 @@ impl Immagine {
                         .active(|s| s.opacity(0.6))
                         .child(cell)
                         .child(caption(p, special.title(), count_label(count, one, many)))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if !window.tap_caught_fling() {
+                        .on_click(tap::listener(cx, move |this, cx| {
                                 this.open_special(special, cx)
-                            }
                         }))
                         .into_any_element(),
                 );
