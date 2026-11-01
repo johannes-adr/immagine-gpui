@@ -6,6 +6,7 @@
 mod album_picker;
 mod albums;
 mod downloads;
+mod hidden_date;
 mod login;
 mod people;
 mod range_views;
@@ -330,12 +331,15 @@ impl Immagine {
         .detach();
     }
 
-    fn install_engine(&mut self, store: MemoryStore, cx: &mut Context<Self>) {
+    fn install_engine(&mut self, mut store: MemoryStore, cx: &mut Context<Self>) {
+        // Before the first timeline build, so photos before the "show from" date never flash.
+        store.set_hidden_before(self.hidden_cutoff());
         match SyncEngine::new(store, H::transport(), H::clock(), &self.origin) {
             Ok(engine) => {
                 self.items = Rc::new(oldest_first(engine.store().fetch_timeline()));
                 self.albums.refresh(engine.store());
                 self.engine = Some(engine);
+                self.hidden_recount();
                 self.screen = Screen::Timeline;
             }
             Err(e) => {
@@ -466,6 +470,8 @@ impl Immagine {
                 if let Some(items) = items {
                     t.items = Rc::new(oldest_first(items));
                 }
+                // The "show from" date may have changed while the engine was away; also refreshes the hidden count.
+                t.hidden_after_sync();
                 cx.notify();
             });
             if let Some(bytes) = snapshot {

@@ -375,6 +375,11 @@ pub struct MemoryStore {
     /// Derived: asset id -> albums that link it.
     #[serde(skip)]
     asset_albums: BTreeMap<String, BTreeSet<String>>,
+    /// Display filter ("show photos from"): epoch ms, 0 = off. Rows captured earlier stay in the tables
+    /// (sync keeps working, the date can be lowered again without a resync) but no query returns them.
+    /// Per device, set from a setting, not part of the snapshot.
+    #[serde(skip)]
+    hidden_before: i64,
 }
 
 fn ratio_of(width: Option<i64>, height: Option<i64>) -> Option<f64> {
@@ -484,13 +489,50 @@ impl MemoryStore {
         }
     }
 
+    /// Sets the display cutoff (epoch ms of the first shown instant, 0 = show everything).
+    /// Cheap: queries read it, nothing is rebuilt here; callers rebuild their derived lists once.
+    pub fn set_hidden_before(&mut self, cutoff_millis: i64) {
+        self.hidden_before = cutoff_millis.max(0);
+    }
+
+    pub fn hidden_before(&self) -> i64 {
+        self.hidden_before
+    }
+
+    /// Whether the asset exists and is hidden by the date setting.
+    pub fn is_hidden(&self, id: &str) -> bool {
+        self.assets.get(id).is_some_and(|row| self.date_hidden(row))
+    }
+
+    /// Photos the date setting hides (those that would otherwise show in an album or the timeline).
+    pub fn hidden_count(&self) -> usize {
+        if self.hidden_before <= 0 {
+            return 0;
+        }
+        self.assets.values().filter(|row| row.in_albums() && self.date_hidden(row)).count()
+    }
+
+    fn date_hidden(&self, row: &AssetRow) -> bool {
+        super::hidden_before::is_hidden(row.sort_millis, self.hidden_before)
+    }
+
+    /// `AssetRow::in_timeline` and not hidden by date.
+    fn shows_in_timeline(&self, row: &AssetRow) -> bool {
+        row.in_timeline() && !self.date_hidden(row)
+    }
+
+    /// `AssetRow::in_albums` and not hidden by date.
+    fn shows_in_albums(&self, row: &AssetRow) -> bool {
+        row.in_albums() && !self.date_hidden(row)
+    }
+
     /// Links whose asset exists and is shown in an album.
     fn visible_count(&self, links: &BTreeSet<String>) -> usize {
-        links.iter().filter(|id| self.assets.get(id.as_str()).is_some_and(AssetRow::in_albums)).count()
+        links.iter().filter(|id| self.assets.get(id.as_str()).is_some_and(|row| self.shows_in_albums(row))).count()
     }
 
     /// Rows for `ids`, in the timeline order (capture date descending, id ascending), filtered by `keep`.
-    fn sorted_items<'a>(&self, ids: impl IntoIterator<Item = &'a str>, keep: fn(&AssetRow) -> bool) -> Vec<TimelineItem> {
+    fn sorted_items<'a>(&self, ids: impl IntoIterator<Item = &'a str>, keep: impl Fn(&AssetRow) -> bool) -> Vec<TimelineItem> {
         let mut found: Vec<(i64, &str, &AssetRow)> = ids
             .into_iter()
             .filter_map(|id| {
@@ -738,7 +780,8 @@ impl Store for MemoryStore {
         self.timeline_index
             .iter()
             .filter(|(_, id)| {
-                !self.mini_bitmaps.contains_key(id.as_str()) && self.assets.get(id.as_str()).is_some_and(|row| !row.is_trashed)
+                !self.mini_bitmaps.contains_key(id.as_str())
+                    && self.assets.get(id.as_str()).is_some_and(|row| !row.is_trashed && !self.date_hidden(row))
             })
             .take(limit)
             .map(|(_, id)| id.clone())
@@ -752,14 +795,14 @@ impl Store for MemoryStore {
             .iter()
             .filter_map(|(_, id)| {
                 let row = self.assets.get(id.as_str())?;
-                row.in_timeline().then(|| timeline_item(id, row))
+                self.shows_in_timeline(row).then(|| timeline_item(id, row))
             })
             .collect()
     }
 
     fn timeline_items(&self, ids: &[String]) -> Vec<TimelineItem> {
         let unique: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
-        self.sorted_items(unique, AssetRow::in_albums)
+        self.sorted_items(unique, |row| self.shows_in_albums(row))
     }
 
     fn favorite_items(&self) -> Vec<TimelineItem> {
@@ -767,7 +810,7 @@ impl Store for MemoryStore {
             .iter()
             .filter_map(|(_, id)| {
                 let row = self.assets.get(id.as_str())?;
-                (row.is_favorite && row.in_albums()).then(|| timeline_item(id, row))
+                (row.is_favorite && self.shows_in_albums(row)).then(|| timeline_item(id, row))
             })
             .collect()
     }
@@ -785,11 +828,11 @@ impl Store for MemoryStore {
     }
 
     fn favorite_summary(&self) -> (usize, Option<String>) {
-        let count = self.assets.values().filter(|row| row.is_favorite && row.in_albums()).count();
+        let count = self.assets.values().filter(|row| row.is_favorite && self.shows_in_albums(row)).count();
         let cover = self
             .timeline_index
             .iter()
-            .find(|(_, id)| self.assets.get(id.as_str()).is_some_and(|row| row.is_favorite && row.in_albums()))
+            .find(|(_, id)| self.assets.get(id.as_str()).is_some_and(|row| row.is_favorite && self.shows_in_albums(row)))
             .map(|(_, id)| id.clone());
         (count, cover)
     }
@@ -873,7 +916,7 @@ impl Store for MemoryStore {
 
     fn album_assets(&self, album_id: &str) -> Vec<TimelineItem> {
         match self.album_links.get(album_id) {
-            Some(links) => self.sorted_items(links.iter().map(String::as_str), AssetRow::in_albums),
+            Some(links) => self.sorted_items(links.iter().map(String::as_str), |row| self.shows_in_albums(row)),
             None => Vec::new(),
         }
     }
@@ -1044,7 +1087,7 @@ impl Store for MemoryStore {
                 let Some(row) = self.assets.get(asset_id.as_str()) else {
                     continue;
                 };
-                if !row.in_albums() {
+                if !self.shows_in_albums(row) {
                     continue;
                 }
                 members.push(OfflineMember {
@@ -2059,5 +2102,75 @@ mod tests {
         assert_eq!(restored.inbox_queue(), strings(&["a"]));
         assert_eq!(restored.offline_album_ids(), set(&["al"]));
         assert!(restored.album_ids_containing("a").contains("al"));
+    }
+    // MARK: Hidden before (display date filter)
+
+    const DAY_MIN: i64 = 24 * 60;
+
+    /// new (now), mid (3 days ago), old (10 days ago), undated (no capture date); cutoff 5 days ago.
+    fn hidden_fixture() -> (MemoryStore, i64) {
+        let mut db = MemoryStore::new();
+        let mut undated = fav_asset("undated", true, 0, "timeline", false);
+        undated.file_created_at = None;
+        db.upsert_sync_assets(&[
+            fav_asset("new", true, 0, "timeline", false),
+            fav_asset("mid", true, 3 * DAY_MIN, "timeline", false),
+            fav_asset("old", true, 10 * DAY_MIN, "timeline", false),
+            fav_asset("oldarch", true, 11 * DAY_MIN, "archive", false),
+            undated,
+        ]);
+        db.upsert_sync_album(&sync_album("al", "A"));
+        db.add_album_assets("al", &strings(&["new", "old", "oldarch"]));
+        ((db), (BASE_SECS - 5 * 86_400) * 1000)
+    }
+
+    #[test]
+    fn hidden_before_filters_every_query_and_restores() {
+        let (mut db, cut) = hidden_fixture();
+        let all_timeline = ids_of(&db.fetch_timeline());
+        let all_album = ids_of(&db.album_assets("al"));
+        let all_fav = ids_of(&db.favorite_items());
+        assert_eq!(db.hidden_count(), 0);
+        let mini_all = db.assets_without_mini_bitmap(10);
+
+        db.set_hidden_before(cut);
+        assert_eq!(set(&all_timeline.iter().map(String::as_str).collect::<Vec<_>>()), set(&["new", "mid", "old", "undated"]));
+        let shown: BTreeSet<String> = ids_of(&db.fetch_timeline()).into_iter().collect();
+        assert_eq!(shown, set(&["new", "mid", "undated"]), "undated stays visible");
+        assert_eq!(ids_of(&db.album_assets("al")), vec!["new".to_string()]);
+        assert_eq!(db.album_visible_counts().get("al"), Some(&1));
+        let fav: BTreeSet<String> = ids_of(&db.favorite_items()).into_iter().collect();
+        assert_eq!(fav, set(&["new", "mid", "undated"]));
+        assert_eq!(db.favorite_summary().0, 3);
+        assert_eq!(db.timeline_items(&strings(&["new", "old", "mid"])).len(), 2);
+        assert_eq!(db.assets_without_mini_bitmap(10).len(), 3, "no mini work for hidden photos");
+        assert_eq!(db.hidden_count(), 2, "old and the archived old one");
+        assert!(db.is_hidden("old") && !db.is_hidden("mid") && !db.is_hidden("undated") && !db.is_hidden("nope"));
+        // The rows are still there: nothing was dropped.
+        assert_eq!(db.asset_count(), 5);
+        assert!(db.asset("old").is_some());
+
+        // Boundary: the cutoff instant itself is shown, one millisecond before is not.
+        db.set_hidden_before((BASE_SECS - 10 * 86_400) * 1000 + 1);
+        assert!(db.is_hidden("old"));
+        db.set_hidden_before((BASE_SECS - 10 * 86_400) * 1000);
+        assert!(!db.is_hidden("old"));
+
+        // Back to no limit: everything returns without a sync.
+        db.set_hidden_before(0);
+        assert_eq!(ids_of(&db.fetch_timeline()), all_timeline);
+        assert_eq!(ids_of(&db.album_assets("al")), all_album);
+        assert_eq!(ids_of(&db.favorite_items()), all_fav);
+        assert_eq!(db.assets_without_mini_bitmap(10), mini_all);
+        assert_eq!(db.album_visible_counts().get("al"), Some(&3));
+    }
+
+    #[test]
+    fn hidden_before_is_not_persisted_and_rows_survive_snapshots() {
+        let (mut db, cut) = hidden_fixture();
+        db.set_hidden_before(cut);
+        let restored = MemoryStore::restore(&db.snapshot().unwrap()).unwrap();
+        assert_eq!(restored.hidden_before(), 0, "per-device setting, applied from the settings at start");
+        assert_eq!(restored.fetch_timeline().len(), 4);
     }
 }

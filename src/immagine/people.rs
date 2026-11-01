@@ -75,7 +75,7 @@ async fn all_people(origin: &str, token: &str) -> Result<Vec<Person>, ClientErro
 }
 
 /// Every photo of one person, newest first; photos without a capture date sort last.
-async fn person_photos(origin: &str, person_id: &str, token: &str) -> Result<Vec<TimelineItem>, ClientError> {
+async fn person_photos(origin: &str, person_id: &str, token: &str, cutoff: i64) -> Result<Vec<TimelineItem>, ClientError> {
     let client = ImmichClient::new(origin, H::transport())?;
     let mut items: Vec<TimelineItem> = Vec::new();
     for page in 1..=MAX_PAGES {
@@ -86,7 +86,7 @@ async fn person_photos(origin: &str, person_id: &str, token: &str) -> Result<Vec
             break;
         }
     }
-    items.retain(|item| !item.is_trashed);
+    items.retain(|item| !item.is_trashed && !crate::logic::hidden_before::hides_iso(item.sort_date.as_deref(), cutoff));
     items.sort_by(|a, b| b.sort_date.cmp(&a.sort_date));
     Ok(items)
 }
@@ -139,11 +139,12 @@ impl Immagine {
         cx.notify();
     }
 
-    fn load_person_photos(&mut self, id: String, cx: &mut Context<Self>) {
+    pub(super) fn load_person_photos(&mut self, id: String, cx: &mut Context<Self>) {
+        let cutoff = self.hidden_cutoff();
         let origin = self.origin.clone();
         let token = self.token.clone();
         cx.spawn(async move |this, cx| {
-            let result = person_photos(&origin, &id, &token).await;
+            let result = person_photos(&origin, &id, &token, cutoff).await;
             let _ = this.update(cx, |t, cx| {
                 // The user may have left the page or opened another person meanwhile.
                 match result {
