@@ -6,6 +6,7 @@
 use super::{thumbs, Immagine};
 use crate::components::button::{self, Surface};
 use crate::components::glass::glass_div_with;
+use crate::components::measure;
 use crate::components::morph::{self, Morph};
 use crate::components::sheet::Pointer;
 use crate::logic::client::ImmichClient;
@@ -1085,7 +1086,7 @@ impl Immagine {
                 }
                 let bar = div().id("viewer-scrub").flex_1().h(px(40.)).relative().flex().items_center();
                 let bar = bar
-                    .child(canvas(move |bounds, _, _| track.set((bounds.origin.x.into(), bounds.origin.y.into(), bounds.size.width.into(), bounds.size.height.into())), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
+                    .child(measure::bounds(move |b| track.set(measure::rect(b))))
                     .child(div().w_full().h(px(4.)).rounded(px(2.)).bg(Rgba { a: 0.3 * k, ..rgb(0xffffff).into() }))
                     .child(div().absolute().left_0().h(px(4.)).w(relative(fraction)).rounded(px(2.)).bg(white))
                     .child(div().absolute().left(relative(fraction)).ml(px(-7.)).w(px(14.)).h(px(14.)).rounded(px(7.)).bg(white));
@@ -1409,14 +1410,7 @@ impl Immagine {
                 .text_color(rgb(0xffffff))
                 .opacity(k)
                 .child(
-                    canvas(|_, _, _| (), move |b, _, _, _| {
-                        let (x, y, w, h): (f32, f32, f32, f32) = (b.origin.x.into(), b.origin.y.into(), b.size.width.into(), b.size.height.into());
-                        rect.set(Some((x, y, w, h)));
-                    })
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full(),
+                    measure::bounds(move |b| rect.set(Some(measure::rect(b)))),
                 )
                 .child(list)
         });

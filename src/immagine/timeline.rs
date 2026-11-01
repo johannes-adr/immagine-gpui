@@ -9,6 +9,7 @@ use crate::theme::Palette;
 use crate::logic::models::timeline::TimelineItem;
 use crate::logic::range_groups::{format_range, month_label, parse_bucket};
 use gpui_kit::prelude::FluentBuilder;
+use crate::components::measure;
 use crate::components::tap;
 use gpui_kit::*;
 use std::rc::Rc;
@@ -497,7 +498,7 @@ impl Immagine {
         } else {
             div().size_full().child(list)
         };
-        div().flex_1().relative().child(list).child(canvas(move |bounds, _, _| grid_bounds.set(bounds), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
+        div().flex_1().relative().child(list).child(measure::bounds(move |b| grid_bounds.set(b)))
     }
 
     pub(super) fn timeline_view(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {

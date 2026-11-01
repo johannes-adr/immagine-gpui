@@ -328,29 +328,16 @@ impl Immagine {
             .map(|(video, f)| format!("Aktuell: {} {} %", if video { "Video" } else { "Foto" }, (f * 100.).round() as u32));
         let line = |text: String, color: Rgba| div().text_size(px(14.)).text_color(color).child(text);
         let id = job.id;
-        let button = |key: &'static str, label: &'static str, color: Rgba| {
-            div()
-                .id((key, id as usize))
-                .flex_1()
-                .h(px(40.))
-                .rounded(px(12.))
-                .bg(rgba(0x7878801f))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(15.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(color)
-                .active(|s| s.opacity(0.6))
-                .child(label)
+        let action = |key: &'static str, label: &'static str, color: Rgba| {
+            button::filled((key, id as usize), rgba(0x7878801f), 40., 12., label).flex_1().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).text_color(color)
         };
         let actions = (!job.state.finished()).then(|| {
             let toggle = if job.state == JobState::Running {
-                button("job-pause", "Pausieren", rgb(BLUE)).on_click(cx.listener(move |this, _, _, cx| this.jobs_set_state(id, JobState::Paused, cx)))
+                action("job-pause", "Pausieren", rgb(BLUE)).on_click(cx.listener(move |this, _, _, cx| this.jobs_set_state(id, JobState::Paused, cx)))
             } else {
-                button("job-resume", "Fortsetzen", rgb(BLUE)).on_click(cx.listener(move |this, _, _, cx| this.jobs_set_state(id, JobState::Running, cx)))
+                action("job-resume", "Fortsetzen", rgb(BLUE)).on_click(cx.listener(move |this, _, _, cx| this.jobs_set_state(id, JobState::Running, cx)))
             };
-            let cancel = button("job-cancel", "Abbrechen", rgb(0xff3b30)).on_click(cx.listener(move |this, _, _, cx| this.jobs_set_state(id, JobState::Cancelled, cx)));
+            let cancel = action("job-cancel", "Abbrechen", rgb(0xff3b30)).on_click(cx.listener(move |this, _, _, cx| this.jobs_set_state(id, JobState::Cancelled, cx)));
             div().pt_1().flex().flex_row().gap_2().child(toggle).child(cancel)
         });
         let waiting = job.state == JobState::Running && jobs::runnable(&self.jobs.list) != Some(job.id);

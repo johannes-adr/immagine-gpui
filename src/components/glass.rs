@@ -1,3 +1,5 @@
+//! Liquid glass primitives. They need the vendored `Window::paint_glass` (see the note in `components/mod.rs`).
+
 use gpui_kit::*;
 
 /// Liquid glass: a div whose backdrop is blurred and refracted by the renderer's glass pass.
