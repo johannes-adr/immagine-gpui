@@ -549,6 +549,25 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn delete_confirmation_morphs_open_blocks_gestures_and_ends_with_select_mode() {
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|w, cx| Immagine::new(0., 0., false, false, w, cx));
+        view.update(cx, |app, cx| {
+            open(cx, app);
+            app.select_toggle("a1", cx);
+            assert!(!app.select.overlay_open());
+            app.open_sel_delete(cx);
+            assert!(app.select.delete.is_open() && app.select.overlay_open(), "the card owns the gestures");
+            app.close_sel_delete(cx);
+            assert!(app.select.delete.active() && !app.select.delete.is_open(), "closing keeps the animation until it finishes");
+            app.select.delete.reset();
+            app.open_sel_delete(cx);
+            app.sel_delete(cx);
+            assert!(!app.select.delete.active(), "confirming resets the morph");
+        });
+    }
+
+    #[::core::prelude::v1::test]
     fn swipe_selects_a_range_and_a_swipe_on_a_selected_tile_deselects() {
         let mut cx = TestAppContext::single();
         let (view, cx) = cx.add_window_view(|w, cx| Immagine::new(0., 0., false, false, w, cx));
