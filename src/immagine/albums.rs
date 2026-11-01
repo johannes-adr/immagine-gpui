@@ -124,8 +124,8 @@ impl AlbumsState {
             .albums
             .iter()
             .filter_map(|album| {
-                // A cover hidden by the "show from" date falls back to the newest shown photo.
-                let cover = match album.album_thumbnail_asset_id.as_deref().filter(|id| !id.is_empty() && !store.is_hidden(id)) {
+                // A cover that is archived or hidden by the "show from" date falls back to the newest shown photo.
+                let cover = match album.album_thumbnail_asset_id.as_deref().filter(|id| !id.is_empty() && !store.is_hidden(id) && !store.is_archived(id)) {
                     Some(id) => Cover { asset_id: id.to_string(), thumbhash: store.thumbhash(id) },
                     None => store
                         .album_assets(&album.id)

@@ -129,7 +129,7 @@ pub trait Store {
     fn fetch_timeline(&self) -> Vec<TimelineItem>;
     /// Timeline rows of the given assets, newest first (e.g. a person's photos).
     fn timeline_items(&self, ids: &[String]) -> Vec<TimelineItem>;
-    /// Favorites, shown like an album (archived ones too), newest first.
+    /// Favorites, shown like an album (no archive), newest first.
     fn favorite_items(&self) -> Vec<TimelineItem>;
     /// Count and newest favorite (the cover).
     fn favorite_summary(&self) -> (usize, Option<String>);
@@ -306,11 +306,6 @@ impl AssetRow {
     /// `is_trashed = 0 AND (visibility IS NULL OR visibility = 'timeline')`
     fn in_timeline(&self) -> bool {
         !self.is_trashed && matches!(self.visibility.as_deref(), None | Some("timeline"))
-    }
-
-    /// `is_trashed = 0 AND (visibility IS NULL OR visibility IN ('timeline', 'archive'))`
-    fn in_albums(&self) -> bool {
-        !self.is_trashed && matches!(self.visibility.as_deref(), None | Some("timeline") | Some("archive"))
     }
 
     fn visual(&self) -> VisualKey {
@@ -509,7 +504,7 @@ impl MemoryStore {
         if self.hidden_before <= 0 {
             return 0;
         }
-        self.assets.values().filter(|row| row.in_albums() && self.date_hidden(row)).count()
+        self.assets.values().filter(|row| row.in_timeline() && self.date_hidden(row)).count()
     }
 
     fn date_hidden(&self, row: &AssetRow) -> bool {
@@ -521,14 +516,9 @@ impl MemoryStore {
         row.in_timeline() && !self.date_hidden(row)
     }
 
-    /// `AssetRow::in_albums` and not hidden by date.
-    fn shows_in_albums(&self, row: &AssetRow) -> bool {
-        row.in_albums() && !self.date_hidden(row)
-    }
-
     /// Links whose asset exists and is shown in an album.
     fn visible_count(&self, links: &BTreeSet<String>) -> usize {
-        links.iter().filter(|id| self.assets.get(id.as_str()).is_some_and(|row| self.shows_in_albums(row))).count()
+        links.iter().filter(|id| self.assets.get(id.as_str()).is_some_and(|row| self.shows_in_timeline(row))).count()
     }
 
     /// Rows for `ids`, in the timeline order (capture date descending, id ascending), filtered by `keep`.
@@ -802,7 +792,7 @@ impl Store for MemoryStore {
 
     fn timeline_items(&self, ids: &[String]) -> Vec<TimelineItem> {
         let unique: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
-        self.sorted_items(unique, |row| self.shows_in_albums(row))
+        self.sorted_items(unique, |row| self.shows_in_timeline(row))
     }
 
     fn favorite_items(&self) -> Vec<TimelineItem> {
@@ -810,7 +800,7 @@ impl Store for MemoryStore {
             .iter()
             .filter_map(|(_, id)| {
                 let row = self.assets.get(id.as_str())?;
-                (row.is_favorite && self.shows_in_albums(row)).then(|| timeline_item(id, row))
+                (row.is_favorite && self.shows_in_timeline(row)).then(|| timeline_item(id, row))
             })
             .collect()
     }
@@ -828,11 +818,11 @@ impl Store for MemoryStore {
     }
 
     fn favorite_summary(&self) -> (usize, Option<String>) {
-        let count = self.assets.values().filter(|row| row.is_favorite && self.shows_in_albums(row)).count();
+        let count = self.assets.values().filter(|row| row.is_favorite && self.shows_in_timeline(row)).count();
         let cover = self
             .timeline_index
             .iter()
-            .find(|(_, id)| self.assets.get(id.as_str()).is_some_and(|row| row.is_favorite && self.shows_in_albums(row)))
+            .find(|(_, id)| self.assets.get(id.as_str()).is_some_and(|row| row.is_favorite && self.shows_in_timeline(row)))
             .map(|(_, id)| id.clone());
         (count, cover)
     }
@@ -916,7 +906,7 @@ impl Store for MemoryStore {
 
     fn album_assets(&self, album_id: &str) -> Vec<TimelineItem> {
         match self.album_links.get(album_id) {
-            Some(links) => self.sorted_items(links.iter().map(String::as_str), |row| self.shows_in_albums(row)),
+            Some(links) => self.sorted_items(links.iter().map(String::as_str), |row| self.shows_in_timeline(row)),
             None => Vec::new(),
         }
     }
@@ -1087,7 +1077,7 @@ impl Store for MemoryStore {
                 let Some(row) = self.assets.get(asset_id.as_str()) else {
                     continue;
                 };
-                if !self.shows_in_albums(row) {
+                if !self.shows_in_timeline(row) {
                     continue;
                 }
                 members.push(OfflineMember {
@@ -1562,7 +1552,7 @@ mod tests {
         db.upsert_sync_album(&sync_album("al", "A"));
         db.add_album_assets("al", &strings(&["visible", "motion", "archived", "trashed"]));
         let shown: BTreeSet<String> = ids_of(&db.album_assets("al")).into_iter().collect();
-        assert_eq!(shown, set(&["visible", "archived"]), "albums show archived photos too");
+        assert_eq!(shown, set(&["visible"]), "archived photos only show on the archive page");
     }
 
     fn kinded(id: &str, kind: &str, visibility: &str, trashed: bool, minutes_ago: i64) -> SyncAsset {
@@ -1787,9 +1777,9 @@ mod tests {
             fav_asset("trashed", true, 0, "timeline", true),
             fav_asset("plain", false, 0, "timeline", false),
         ]);
-        assert_eq!(ids_of(&db.favorite_items()), strings(&["new", "archived", "old"]), "newest first, archived too, like an album");
+        assert_eq!(ids_of(&db.favorite_items()), strings(&["new", "old"]), "newest first, no archive");
         let (count, cover) = db.favorite_summary();
-        assert_eq!(count, 3);
+        assert_eq!(count, 2);
         assert_eq!(cover.as_deref(), Some("new"), "the newest favorite is the cover");
         assert!(db.is_favorite("old"));
         assert!(!db.is_favorite("plain"));
@@ -2149,7 +2139,7 @@ mod tests {
         assert_eq!(db.favorite_summary().0, 3);
         assert_eq!(db.timeline_items(&strings(&["new", "old", "mid"])).len(), 2);
         assert_eq!(db.assets_without_mini_bitmap(10).len(), 3, "no mini work for hidden photos");
-        assert_eq!(db.hidden_count(), 2, "old and the archived old one");
+        assert_eq!(db.hidden_count(), 1, "the archived old one is not shown anyway");
         assert!(db.is_hidden("old") && !db.is_hidden("mid") && !db.is_hidden("undated") && !db.is_hidden("nope"));
         // The rows are still there: nothing was dropped.
         assert_eq!(db.asset_count(), 5);
@@ -2167,7 +2157,7 @@ mod tests {
         assert_eq!(ids_of(&db.album_assets("al")), all_album);
         assert_eq!(ids_of(&db.favorite_items()), all_fav);
         assert_eq!(db.assets_without_mini_bitmap(10), mini_all);
-        assert_eq!(db.album_visible_counts().get("al"), Some(&3));
+        assert_eq!(db.album_visible_counts().get("al"), Some(&2));
     }
 
     #[test]
