@@ -3,14 +3,11 @@
 //! toolbar and the viewer's "..." menu both use it. A tap on an album queues `AlbumOp::add` (applied locally at
 //! once, sent by the outbox), closes the sheet and, when it came from the selection, ends select mode.
 //!
-//! The sheet has its own `RubberBand` and is routed like the jobs sheet: `picker_pinch` from `Immagine::pinch`
-//! (raw touches on the title strip drag it) and `picker_scroll_event` from `render`'s rubber-band input.
-//! It is drawn after the viewer overlay, so it also covers the viewer.
+//! It is routed like the other sheets (`Immagine::top_sheet`) and drawn after the viewer overlay, so it also
+//! covers the viewer.
 
 use super::Immagine;
-use crate::components::rubber_band::RubberBand;
 use crate::components::sheet::{self, Sheet};
-use crate::host::Pinch;
 use crate::logic::models::album_op::AlbumOp;
 use crate::logic::models::album_tree::AlbumPath;
 use crate::theme::Palette;
@@ -22,8 +19,6 @@ const ROW: f32 = 56.;
 #[derive(Default)]
 pub(super) struct PickerState {
     pub(super) sheet: Sheet,
-    scroll: ScrollHandle,
-    pub(super) rubber: RubberBand,
     /// The assets a pick adds, and whether they are the current selection (select mode ends after the pick).
     ids: Vec<String>,
     from_selection: bool,
@@ -73,39 +68,12 @@ impl Immagine {
         cx.notify();
     }
 
-    /// Touch scrolling of the sheet's list (see `jobs_scroll_event`).
-    pub(super) fn picker_scroll_event(&mut self, dy: f32, phase: TouchPhase, window: &mut Window) -> (bool, bool) {
-        if self.picker.sheet.dragging() {
-            window.cancel_touch_momentum();
-            return (true, false);
-        }
-        let scroll = self.picker.scroll.clone();
-        self.picker.rubber.event(dy, phase, Some(&scroll), window)
-    }
-
-    /// Raw single-finger events (the touch path of the sheet's drag).
-    pub(super) fn picker_pinch(&mut self, event: Pinch, cx: &mut Context<Self>) {
-        let sheet = &self.picker.sheet;
-        match event {
-            Pinch::Down { y, .. } if sheet.hit(y) => sheet.grab(y),
-            Pinch::Drag { y, .. } => sheet.drag_to(y),
-            Pinch::Up { y, .. } => {
-                if y >= 0. {
-                    sheet.drag_to(y);
-                }
-                sheet.release();
-            }
-            _ => return,
-        }
-        cx.notify();
-    }
-
     pub(super) fn picker_overlay(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let sheet = &self.picker.sheet;
         if !sheet.visible() {
             return None;
         }
-        let (background, row_bg) = if self.dark { (rgb(0x1c1c1e), rgb(0x2c2c2e)) } else { (rgb(0xf2f2f7), rgb(0xffffff)) };
+        let row_bg = p.ui.card;
         let mut list = div().px_4().pt_2().pb(px(self.bottom.max(10.) + 16.)).flex().flex_col().gap(px(1.));
         if self.albums.albums.is_empty() {
             list = list.child(div().py_4().text_size(px(15.)).text_color(p.secondary).child("Keine Alben vorhanden."));
@@ -122,7 +90,7 @@ impl Immagine {
                 .items_center()
                 .text_size(px(17.))
                 .text_color(p.label)
-                .active(|s| s.opacity(0.6))
+                .active(crate::components::button::dim)
                 .child(AlbumPath::leaf_of_album_name(&album.album_name));
             if i == 0 {
                 row = row.rounded_t(px(14.));
@@ -136,26 +104,13 @@ impl Immagine {
                 }
             })));
         }
-        let content = div()
-            .id("picker-scroll")
-            .absolute()
-            .top(px(sheet::HEADER))
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .overflow_y_scroll()
-            .track_scroll(&self.picker.scroll)
-            .child(self.picker.rubber.shift(list))
-            .into_any_element();
         Some(sheet::overlay(
             sheet,
             |this: &Immagine| &this.picker.sheet,
             cx,
             window,
-            self.top.max(12.) + 10.,
-            (background, p.glass_tint, p.label),
-            "Zum Album hinzufügen",
-            content,
+            sheet::Spec { id: "picker", title: "Zum Album hinzufügen", top_margin: self.top.max(12.) + 10., theme: &p.ui },
+            list,
             |this, cx| this.close_album_picker(cx),
         ))
     }

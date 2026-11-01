@@ -8,9 +8,9 @@ use super::downloads::{fetch_and_store, Fetched};
 use super::settings::size;
 use super::Immagine;
 use crate::components::button::{self, Surface};
-use crate::components::rubber_band::RubberBand;
+use crate::components::list;
 use crate::components::sheet::{self, Sheet};
-use crate::host::{Current as H, Host, Pinch};
+use crate::host::{Current as H, Host};
 use crate::logic::jobs::{self, Job, JobItem, JobState, Outcome};
 use crate::theme::{Palette, BLUE};
 use crate::util::now_ms;
@@ -32,8 +32,6 @@ pub(super) struct JobsState {
     tick: Option<(u64, f64)>,
     last_save: f64,
     pub(super) sheet: Sheet,
-    scroll: ScrollHandle,
-    pub(super) rubber: RubberBand,
 }
 
 impl JobsState {
@@ -302,34 +300,7 @@ impl Immagine {
         cx.notify();
     }
 
-    /// See `settings_scroll_event`.
-    pub(super) fn jobs_scroll_event(&mut self, dy: f32, phase: TouchPhase, window: &mut Window) -> (bool, bool) {
-        if self.jobs.sheet.dragging() {
-            window.cancel_touch_momentum();
-            return (true, false);
-        }
-        let scroll = self.jobs.scroll.clone();
-        self.jobs.rubber.event(dy, phase, Some(&scroll), window)
-    }
-
-    /// Raw single-finger events (the touch path of the sheet's drag).
-    pub(super) fn jobs_pinch(&mut self, event: Pinch, cx: &mut Context<Self>) {
-        let sheet = &self.jobs.sheet;
-        match event {
-            Pinch::Down { y, .. } if sheet.hit(y) => sheet.grab(y),
-            Pinch::Drag { y, .. } => sheet.drag_to(y),
-            Pinch::Up { y, .. } => {
-                if y >= 0. {
-                    sheet.drag_to(y);
-                }
-                sheet.release();
-            }
-            _ => return,
-        }
-        cx.notify();
-    }
-
-    fn job_card(&self, job: &Job, p: &Palette, card: Rgba, cx: &mut Context<Self>) -> Div {
+    fn job_card(&self, job: &Job, p: &Palette, cx: &mut Context<Self>) -> Div {
         let total = job.total();
         let fraction = if total == 0 { 1. } else { job.handled() as f32 / total as f32 };
         let (state, state_color) = match job.state {
@@ -384,8 +355,8 @@ impl Immagine {
         });
         let waiting = job.state == JobState::Running && jobs::runnable(&self.jobs.list) != Some(job.id);
         div()
-            .rounded(px(22.))
-            .bg(card)
+            .rounded(px(list::RADIUS))
+            .bg(p.ui.card)
             .p_4()
             .flex()
             .flex_col()
@@ -419,10 +390,7 @@ impl Immagine {
         if !sheet.visible() {
             return None;
         }
-        let (background, card) = if self.dark { (rgb(0x1c1c1e), rgb(0x2c2c2e)) } else { (rgb(0xf2f2f7), rgb(0xffffff)) };
         let (active, finished) = jobs::listed(&self.jobs.list);
-        let caption = |text: &str| div().px_4().text_size(px(13.)).text_color(p.secondary).child(text.to_uppercase());
-        let section = |title: &str, cards: Vec<Div>| div().flex().flex_col().gap_2().child(caption(title)).children(cards);
         let mut inner = div().px_4().pt_2().pb(px(self.bottom.max(16.))).flex().flex_col().gap_6();
         if active.is_empty() && finished.is_empty() {
             inner = inner.child(
@@ -436,33 +404,20 @@ impl Immagine {
             );
         }
         if !active.is_empty() {
-            let cards = active.iter().map(|j| self.job_card(j, p, card, cx)).collect();
-            inner = inner.child(section("Aktiv", cards));
+            let cards = active.iter().map(|j| self.job_card(j, p, cx)).collect();
+            inner = inner.child(list::section(&p.ui, "Aktiv", cards));
         }
         if !finished.is_empty() {
-            let cards = finished.iter().map(|j| self.job_card(j, p, card, cx)).collect();
-            inner = inner.child(section("Abgeschlossen", cards));
+            let cards = finished.iter().map(|j| self.job_card(j, p, cx)).collect();
+            inner = inner.child(list::section(&p.ui, "Abgeschlossen", cards));
         }
-        let content = div()
-            .id("jobs-scroll")
-            .absolute()
-            .top(px(sheet::HEADER))
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .overflow_y_scroll()
-            .track_scroll(&self.jobs.scroll)
-            .child(self.jobs.rubber.shift(inner))
-            .into_any_element();
         Some(sheet::overlay(
             sheet,
             |this: &Immagine| &this.jobs.sheet,
             cx,
             window,
-            self.top.max(12.) + 10.,
-            (background, p.glass_tint, p.label),
-            "Jobs",
-            content,
+            sheet::Spec { id: "jobs", title: "Jobs", top_margin: self.top.max(12.) + 10., theme: &p.ui },
+            inner,
             |this, cx| this.close_jobs(cx),
         ))
     }

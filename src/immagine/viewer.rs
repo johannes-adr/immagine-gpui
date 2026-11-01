@@ -7,6 +7,7 @@ use super::{thumbs, Immagine};
 use crate::components::button::{self, Surface};
 use crate::components::glass::glass_div_with;
 use crate::components::morph::{self, Morph};
+use crate::components::sheet::Pointer;
 use crate::logic::client::ImmichClient;
 use crate::logic::crop_geometry::{self, CropAspect, CropHandle, HANDLE_TOLERANCE};
 use crate::logic::grid::layout::{Point as CPoint, Rect as CRect, Size as CSize};
@@ -496,14 +497,17 @@ impl Immagine {
     }
 
     fn pinch(&mut self, event: Pinch, cx: &mut Context<Self>) {
-        if self.picker.sheet.visible() {
-            return self.picker_pinch(event, cx);
-        }
-        if self.settings.sheet.visible() {
-            return self.settings_pinch(event, cx);
-        }
-        if self.jobs.sheet.visible() {
-            return self.jobs_pinch(event, cx);
+        if let Some(sheet) = self.top_sheet() {
+            let pointer = match event {
+                Pinch::Down { y, .. } => Some(Pointer::Down(y)),
+                Pinch::Drag { y, .. } => Some(Pointer::Drag(y)),
+                Pinch::Up { y, .. } => Some(Pointer::Up((y >= 0.).then_some(y))),
+                _ => None,
+            };
+            if pointer.is_some_and(|p| sheet.pointer(p)) {
+                cx.notify();
+            }
+            return;
         }
         if self.viewer.is_none() {
             return self.grid_pinch(event, cx);

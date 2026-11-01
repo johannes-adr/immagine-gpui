@@ -23,6 +23,7 @@ mod video_player;
 mod viewer;
 
 use crate::components::rubber_band::{self, RubberBand};
+use crate::components::sheet::Sheet;
 use crate::components::fps::{fps_badge, FpsMeter};
 use crate::logic::client::{ClientError, ImmichClient};
 use crate::logic::models::timeline::TimelineItem;
@@ -502,10 +503,15 @@ impl TileRect {
 }
 
 impl Immagine {
+    /// The sheet that is shown, topmost first (the album picker covers the viewer, settings and jobs the page).
+    pub(super) fn top_sheet(&self) -> Option<&Sheet> {
+        [&self.picker.sheet, &self.settings.sheet, &self.jobs.sheet].into_iter().find(|s| s.visible())
+    }
+
     /// The scroll handle of whatever scrolls on screen now, for the rubber band; `None` while the viewer is open
     /// or on screens without a scroll view.
     fn active_scroll(&self) -> Option<ScrollHandle> {
-        if self.screen != Screen::Timeline || self.viewer.as_ref().is_some_and(|v| !v.closing) || self.settings.sheet.visible() || self.jobs.sheet.visible() || self.picker.sheet.visible() {
+        if self.screen != Screen::Timeline || self.viewer.as_ref().is_some_and(|v| !v.closing) || self.top_sheet().is_some() {
             return None;
         }
         let list = |h: &UniformListScrollHandle| h.0.borrow().base_handle.clone();
@@ -541,11 +547,8 @@ impl Render for Immagine {
         }
         self.rubber.tick(window);
         self.settings.sheet.tick(window);
-        self.settings.rubber.tick(window);
         self.jobs.sheet.tick(window);
-        self.jobs.rubber.tick(window);
         self.picker.sheet.tick(window);
-        self.picker.rubber.tick(window);
         self.grid_default(window.viewport_size().width.into());
         self.grid_tick(window);
         self.select_check();
@@ -607,17 +610,14 @@ impl Render for Immagine {
                     return (true, false);
                 }
                 if this.picker.sheet.visible() {
-                    return this.picker_scroll_event(dy, phase, window);
+                    return this.picker.sheet.scroll_event(dy, phase, window);
                 }
                 if this.select.overlay_open() {
                     return (false, false);
                 }
-                // The settings sheet covers the page: its list takes the gesture, with its own band.
-                if this.settings.sheet.visible() {
-                    return this.settings_scroll_event(dy, phase, window);
-                }
-                if this.jobs.sheet.visible() {
-                    return this.jobs_scroll_event(dy, phase, window);
+                // A sheet covers the page: its list takes the gesture, with its own band.
+                if let Some(sheet) = this.top_sheet() {
+                    return sheet.scroll_event(dy, phase, window);
                 }
                 let scroll = this.active_scroll();
                 this.rubber.event(dy, phase, scroll.as_ref(), window)

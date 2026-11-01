@@ -3,11 +3,17 @@
 //! follows the finger down but never lifts above fully open; on release it closes when it was pulled past
 //! `CLOSE_AT` of its height or flicked down, else it springs back open.
 //!
-//! Usage: keep one `Sheet` in the view, call `tick` once per render, put `overlay` last in the root's children
-//! while `visible()`, and feed raw touch events to `hit`/`grab`/`drag_to`/`release` (desktop mouse events are
-//! wired by `overlay` itself). `open`/`close` start the animations.
+//! Usage: keep one `Sheet` per sheet in the view (it owns the motion, the content's scroll handle and its own
+//! rubber band, so the page's band does not bounce behind the scrim), call `tick` once per render, and put
+//! `overlay` last in the root's children while `visible()`. Routing, each a one-liner in the host:
+//! - raw touches (touch screens do not deliver them as mouse events): map them to `Pointer` and call `pointer`;
+//! - touch scroll steps (from `rubber_band::input`): call `scroll_event` while the sheet is visible;
+//! - `open`/`close` start the animations; desktop mouse events are wired by `overlay` itself.
 
-use crate::components::glass::glass_div_with;
+use crate::components::button::{self, Surface};
+use crate::components::rubber_band::RubberBand;
+use crate::components::scrim::scrim;
+use crate::components::theme::Theme;
 use crate::components::icon::{glyph, Glyph};
 use crate::components::clock::now_ms;
 use crate::components::ease::{ease_out, lerp};
@@ -48,10 +54,20 @@ struct State {
     height: f32,
 }
 
-#[derive(Default)]
-pub(crate) struct Sheet(Cell<State>);
+/// A pointer event on the sheet, y in window coordinates.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Pointer {
+    Down(f32),
+    Drag(f32),
+    /// Lifted at `y`, or `None` when the position is unknown (cancelled).
+    Up(Option<f32>),
+}
 
-impl Sheet {
+/// The sheet's motion: a `Cell` of a `Copy` state, edited from event handlers and the render pass alike.
+#[derive(Default)]
+struct Motion(Cell<State>);
+
+impl Motion {
     fn edit(&self, f: impl FnOnce(&mut State)) {
         let mut s = self.0.get();
         f(&mut s);
@@ -156,40 +172,116 @@ impl Sheet {
     }
 }
 
-/// The sheet's overlay: dimmed backdrop, the panel and its close circle. `content` fills the panel below the
-/// title. `field` picks the `Sheet` out of the view; `close` runs when the circle or the backdrop is tapped.
+/// A modal bottom sheet: motion, scrolling content and its own overscroll band.
+#[derive(Default)]
+pub(crate) struct Sheet {
+    motion: Motion,
+    scroll: ScrollHandle,
+    rubber: RubberBand,
+}
+
+impl Sheet {
+    pub(crate) fn visible(&self) -> bool {
+        self.motion.visible()
+    }
+
+    pub(crate) fn is_open(&self) -> bool {
+        self.motion.is_open()
+    }
+
+    pub(crate) fn open(&self) {
+        self.motion.open()
+    }
+
+    pub(crate) fn close(&self) {
+        self.motion.close()
+    }
+
+    /// Advances the sheet's motion and its rubber band; call from `render`.
+    pub(crate) fn tick(&self, window: &mut Window) {
+        self.motion.tick(window);
+        self.rubber.tick(window);
+    }
+
+    /// A raw pointer event (the touch path of the title strip's drag). True when it was used and the view should
+    /// redraw.
+    pub(crate) fn pointer(&self, event: Pointer) -> bool {
+        let m = &self.motion;
+        match event {
+            Pointer::Down(y) if m.hit(y) => m.grab(y),
+            Pointer::Drag(y) => m.drag_to(y),
+            Pointer::Up(y) => {
+                if let Some(y) = y {
+                    m.drag_to(y);
+                }
+                m.release();
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// A touch scroll step while the sheet is shown: the content scrolls like any `overflow_y_scroll` div, this adds
+    /// the overscroll band and swallows the steps while the title strip drags the sheet, so the list does not scroll
+    /// along. Returns (used, redraw) for `rubber_band::input`.
+    pub(crate) fn scroll_event(&self, dy: f32, phase: TouchPhase, window: &mut Window) -> (bool, bool) {
+        if self.motion.dragging() {
+            window.cancel_touch_momentum();
+            return (true, false);
+        }
+        self.rubber.event(dy, phase, Some(&self.scroll), window)
+    }
+}
+
+/// What `overlay` needs to know about one sheet.
+pub(crate) struct Spec<'a> {
+    /// Prefix of the scroll area's element id.
+    pub id: &'static str,
+    pub title: &'a str,
+    /// Distance from the top of the window to the sheet's top edge when fully open.
+    pub top_margin: f32,
+    pub theme: &'a Theme,
+}
+
+/// The sheet's overlay: dimmed backdrop, the panel with its title and close circle, and `content` (an element
+/// taller than the panel scrolls, with the sheet's own overscroll band). `field` picks the `Sheet` out of the view;
+/// `close` runs when the circle or the backdrop is tapped.
 pub(crate) fn overlay<V: 'static>(
     sheet: &Sheet,
     field: fn(&V) -> &Sheet,
     cx: &mut Context<V>,
     window: &Window,
-    top_margin: f32,
-    colors: (Rgba, Hsla, Rgba),
-    title: &str,
-    content: AnyElement,
+    spec: Spec,
+    content: Div,
     close: fn(&mut V, &mut Context<V>),
 ) -> AnyElement {
-    let (background, glass_tint, label) = colors;
+    let theme = spec.theme;
     let vh: f32 = window.viewport_size().height.into();
-    let height = (vh - top_margin).max(100.);
-    let shown = sheet.shown();
-    let top = top_margin + (1. - shown) * height;
-    sheet.edit(|s| {
+    let height = (vh - spec.top_margin).max(100.);
+    let shown = sheet.motion.shown();
+    let top = spec.top_margin + (1. - shown) * height;
+    sheet.motion.edit(|s| {
         s.top = top;
         s.height = height;
     });
-    let close_button = glass_div_with(glass_tint, 20., 1., true)
-        .id("sheet-close")
+    let close_button = button::circle("sheet-close", Surface::new(theme.glass).fresh(), 40.)
         .absolute()
         .top(px(16.))
         .right(px(16.))
-        .size(px(40.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .active(|s| s.opacity(0.6))
-        .child(glyph(Glyph::Close, 20., label))
+        .active(button::dim)
+        .child(glyph(Glyph::Close, 20., theme.label))
         .on_click(cx.listener(move |this, _, _, cx| close(this, cx)));
+    // Scrolls below the title strip (absolute with top + bottom = a definite height, so `max_offset` is the overflow).
+    let scrolling = div()
+        .id(SharedString::from(format!("{}-scroll", spec.id)))
+        .absolute()
+        .top(px(HEADER))
+        .left_0()
+        .right_0()
+        .bottom_0()
+        .overflow_y_scroll()
+        .track_scroll(&sheet.scroll)
+        .child(sheet.rubber.shift(content));
     let panel = div()
         .id("sheet-panel")
         .absolute()
@@ -200,8 +292,8 @@ pub(crate) fn overlay<V: 'static>(
         .rounded_tl(px(CORNER))
         .rounded_tr(px(CORNER))
         .overflow_hidden()
-        .bg(background)
-        .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, _| field(this).grab(e.position.y.into())))
+        .bg(theme.background)
+        .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, _| field(this).motion.grab(e.position.y.into())))
         .child(
             div()
                 .h(px(HEADER))
@@ -210,11 +302,11 @@ pub(crate) fn overlay<V: 'static>(
                 .justify_center()
                 .text_size(px(17.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(label)
-                .child(title.to_string()),
+                .text_color(theme.label)
+                .child(spec.title.to_string()),
         )
         .child(close_button)
-        .child(content);
+        .child(scrolling);
     div()
         .id("sheet-root")
         .absolute()
@@ -223,34 +315,57 @@ pub(crate) fn overlay<V: 'static>(
         .size_full()
         .occlude()
         .on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, _, cx| {
-            if field(this).dragging() {
-                field(this).drag_to(e.position.y.into());
+            if field(this).motion.dragging() {
+                field(this).motion.drag_to(e.position.y.into());
                 cx.notify();
             }
         }))
         .on_mouse_up(MouseButton::Left, cx.listener(move |this, _: &MouseUpEvent, _, cx| {
-            field(this).release();
+            field(this).motion.release();
             cx.notify();
         }))
         .on_mouse_up_out(MouseButton::Left, cx.listener(move |this, _: &MouseUpEvent, _, cx| {
-            field(this).release();
+            field(this).motion.release();
             cx.notify();
         }))
         .child(
-            div()
-                .id("sheet-scrim")
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .bg(rgba(0x00000000 | (0x66 as f32 * shown) as u32))
-                .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
-                    // The panel is a sibling above the scrim but does not occlude it: only taps on the dimmed part close.
-                    if !field(this).hit(e.position().y.into()) {
-                        close(this, cx)
-                    }
-                })),
+            scrim("sheet-scrim", 0.4 * shown).on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                // The panel is a sibling above the scrim but does not occlude it: only taps on the dimmed part close.
+                if !field(this).motion.hit(e.position().y.into()) {
+                    close(this, cx)
+                }
+            })),
         )
         .child(panel)
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn open_close_and_visibility() {
+        let s = Sheet::default();
+        assert!(!s.visible() && !s.is_open());
+        s.open();
+        assert!(s.visible() && s.is_open());
+        s.close();
+        assert!(!s.is_open(), "closing starts at once");
+    }
+
+    #[::core::prelude::v1::test]
+    fn pointer_events_are_used_only_when_they_belong_to_the_sheet() {
+        let s = Sheet::default();
+        // Closed: a press has nothing to grab.
+        assert!(!s.pointer(Pointer::Down(100.)));
+        s.open();
+        // Never laid out (top = 0): everything is on the panel, only the title strip grabs.
+        assert!(s.pointer(Pointer::Down(HEADER + 10.)));
+        assert!(!s.motion.dragging(), "a press below the title strip does not grab");
+        assert!(s.pointer(Pointer::Down(10.)));
+        assert!(s.motion.dragging());
+        assert!(s.pointer(Pointer::Up(None)));
+        assert!(!s.motion.dragging());
+    }
 }
