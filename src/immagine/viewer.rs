@@ -602,32 +602,43 @@ impl Immagine {
         let video = item.is_video();
         // A stored download (original, or the H.264 file of a video) is shared from disk, no request.
         let stored = self.downloads.ids.borrow().contains(&id);
-        if video && !stored {
-            self.status = "Videos lassen sich hier noch nicht teilen.".into();
-            cx.notify();
-            return;
-        }
-        self.status = "Bereite zum Teilen vor …".into();
+        self.status = if video && !stored { "Lade Video zum Teilen …".into() } else { "Bereite zum Teilen vor …".into() };
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = async {
+                let client = ImmichClient::new(&origin, H::transport()).map_err(|e| e.to_string())?;
+                // Name and size come from the asset record; without it the file gets a generic name.
+                let details = client.asset(&id, &token).await.ok();
                 let local = if stored { H::blob_get(super::downloads::DOWNLOAD_DB, &id).await.ok().flatten().filter(|b| !b.is_empty()) } else { None };
                 let bytes = match local {
                     Some(b) => b,
-                    None if video => return Err("Das Video ist nicht mehr gespeichert.".to_string()),
-                    None => {
-                        let client = ImmichClient::new(&origin, H::transport()).map_err(|e| e.to_string())?;
-                        client.original(&id, &token).await.map_err(|e| e.to_string())?
+                    None if video => {
+                        let too_big = || format!("Das Video ist größer als {} MB und lässt sich nicht teilen.", SHARE_MAX_BYTES / 1_000_000);
+                        if details.as_ref().and_then(|a| a.exif_info.as_ref()).and_then(|e| e.file_size_in_byte).is_some_and(|n| n > SHARE_MAX_BYTES as i64) {
+                            return Err(too_big());
+                        }
+                        let url = client.video_playback_url(&id);
+                        // The probe tells the size of the (transcoded) file; a server that ignores Range sends it all.
+                        let probe = H::fetch_range(&url, 0, 0).await?;
+                        if !probe.partial {
+                            probe.bytes
+                        } else {
+                            if probe.total.is_some_and(|n| n > SHARE_MAX_BYTES) {
+                                return Err(too_big());
+                            }
+                            H::fetch_bytes(&url).await?
+                        }
                     }
+                    None => client.original(&id, &token).await.map_err(|e| e.to_string())?,
                 };
-                let (name, mime) = if video {
-                    ("video.mp4", "video/mp4")
-                } else if bytes.starts_with(&[0x89, b'P']) {
-                    ("foto.png", "image/png")
-                } else {
-                    ("foto.jpg", "image/jpeg")
-                };
-                H::share_file(name, mime, bytes).await
+                let (name, mime) = share_name(details.as_ref().and_then(|a| a.original_file_name.as_deref()), &bytes, video);
+                // The sheet is about to open: the busy text goes now, not when it is dismissed.
+                this.update(cx, |t, cx| {
+                    t.status = String::new();
+                    cx.notify();
+                })
+                .ok();
+                H::share_file(&name, mime, bytes).await
             }
             .await;
             this.update(cx, |t, cx| {
@@ -1526,6 +1537,17 @@ fn heart(filled: bool, k: f32) -> Canvas<()> {
 
 #[cfg(test)]
 mod tests {
+    #[::core::prelude::v1::test]
+    fn share_names_follow_the_bytes_sent() {
+        let jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mut heic = vec![0, 0, 0, 24];
+        heic.extend_from_slice(b"ftypheic0000");
+        assert_eq!(super::share_name(Some("IMG_1.HEIC"), &jpeg, false), ("IMG_1.jpg".to_string(), "image/jpeg"));
+        assert_eq!(super::share_name(Some("a/b.jpg"), &heic, false), ("b.heic".to_string(), "image/heic"));
+        assert_eq!(super::share_name(Some("clip.MOV"), b"\0\0\0\x18ftypisom0000", true), ("clip.mp4".to_string(), "video/mp4"));
+        assert_eq!(super::share_name(None, b"", true), ("video.mp4".to_string(), "video/mp4"));
+    }
+
     use super::*;
     use ::gpui::TestAppContext;
     use std::cell::Cell;
@@ -1562,5 +1584,41 @@ mod tests {
         assert_eq!((button.get(), photo.get()), (1, 0), "button action only");
         cx.simulate_click(point(px(300.), px(300.)), Modifiers::none());
         assert_eq!((button.get(), photo.get()), (1, 1), "photo tap still works");
+    }
+}
+
+/// Largest video that is loaded into memory to be shared (web memory is 1 GiB and the bytes are copied on the way).
+const SHARE_MAX_BYTES: u64 = 200_000_000;
+
+/// File name and MIME type for sharing `bytes`: the asset's own name where known, with the extension of what is
+/// really sent (an edited/preview JPEG of a `.HEIC` is `.jpg`, a transcoded video `.mp4`).
+fn share_name(original: Option<&str>, bytes: &[u8], video: bool) -> (String, &'static str) {
+    let (ext, mime) = sniff(bytes).unwrap_or(if video { ("mp4", "video/mp4") } else { ("jpg", "image/jpeg") });
+    let stem = original
+        .map(|n| n.rsplit(['/', '\\']).next().unwrap_or(n))
+        .map(|n| n.rsplit_once('.').map_or(n, |(stem, _)| stem))
+        .filter(|s| !s.is_empty())
+        .unwrap_or(if video { "video" } else { "foto" });
+    (format!("{stem}.{ext}"), mime)
+}
+
+fn sniff(b: &[u8]) -> Option<(&'static str, &'static str)> {
+    if b.starts_with(&[0xFF, 0xD8]) {
+        Some(("jpg", "image/jpeg"))
+    } else if b.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some(("png", "image/png"))
+    } else if b.starts_with(b"GIF8") {
+        Some(("gif", "image/gif"))
+    } else if b.len() > 12 && &b[..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        Some(("webp", "image/webp"))
+    } else if b.len() > 12 && &b[4..8] == b"ftyp" {
+        Some(match &b[8..12] {
+            b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"mif1" | b"msf1" => ("heic", "image/heic"),
+            b"avif" => ("avif", "image/avif"),
+            b"qt  " => ("mov", "video/quicktime"),
+            _ => ("mp4", "video/mp4"),
+        })
+    } else {
+        None
     }
 }

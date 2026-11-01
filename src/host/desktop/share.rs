@@ -164,6 +164,9 @@ mod apple {
             };
             picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
             let app = NSApplication::sharedApplication(mtm);
+            // The picker dismisses itself at once when its app is not active (e.g. started from a background process).
+            #[allow(deprecated)]
+            app.activateIgnoringOtherApps(true);
             let view = app.keyWindow().or_else(|| app.mainWindow()).and_then(|w| w.contentView()).ok_or("Teilen: kein Fenster")?;
             let rect = NSRect::new(NSPoint::new(24., 24.), NSSize::new(1., 1.));
             picker.showRelativeToRect_ofView_preferredEdge(rect, &view, NSRectEdge::MaxY);
