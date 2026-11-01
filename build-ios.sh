@@ -39,8 +39,10 @@ try:
 except Exception:
     d = []
 for x in d:
-    if x.get("hardwareProperties", {}).get("reality") == "physical" and x.get("connectionProperties", {}).get("tunnelState") != "unavailable":
-        print(x["hardwareProperties"]["udid"]); break
+    hw = x.get("hardwareProperties", {})
+    # A paired Apple Watch is a physical device too.
+    if hw.get("reality") == "physical" and hw.get("platform") == "iOS" and x.get("connectionProperties", {}).get("tunnelState") != "unavailable":
+        print(hw["udid"]); break
 PY
 )"
     fi
