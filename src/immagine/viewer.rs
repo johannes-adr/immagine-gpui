@@ -593,6 +593,35 @@ impl Immagine {
         cx.notify();
     }
 
+    /// "Wiederherstellen" (the shown photo is in the Papierkorb): takes it out of the server trash, no confirmation.
+    /// Applied locally at once (timeline and special pages are rebuilt), sent by the outbox.
+    fn restore_current(&mut self, cx: &mut Context<Self>) {
+        let Some(v) = self.viewer.as_mut().filter(|v| !v.closing) else { return };
+        let Some(id) = v.items.get(v.index).map(|i| i.id.clone()) else { return };
+        let Some(engine) = self.engine.as_mut() else {
+            self.status = "Bitte kurz warten, es wird synchronisiert.".into();
+            cx.notify();
+            return;
+        };
+        engine.enqueue(&[AlbumOp::restore(vec![id.clone()])]);
+        {
+            use crate::logic::store::Store;
+            self.items = Rc::new(super::oldest_first(engine.store().fetch_timeline()));
+            self.albums.refresh(engine.store());
+        }
+        Rc::make_mut(&mut v.items).retain(|i| i.id != id);
+        if v.items.is_empty() {
+            self.sync(cx);
+            self.close_viewer(cx);
+            return;
+        }
+        v.index = v.index.min(v.items.len() - 1);
+        v.reset_view();
+        self.refresh_details(cx);
+        self.sync(cx);
+        cx.notify();
+    }
+
     // MARK: - Share
 
     fn share_current(&mut self, cx: &mut Context<Self>) {
@@ -1379,10 +1408,16 @@ impl Immagine {
                     }
                     let pill = button("viewer-pill", 164.).child(fav).child(info).child(sliders);
                     let mut share = button("viewer-share", 48.).child(super::icons::glyph(super::icons::Glyph::Share, 26., white));
-                    let mut trash = button("viewer-trash", 48.).child(super::icons::glyph(super::icons::Glyph::Trash, 26., white));
+                    // A photo in the Papierkorb is restored instead of deleted again.
+                    let in_trash = v.items.get(v.index).is_some_and(|i| i.is_trashed);
+                    let mut trash = button("viewer-trash", 48.).child(super::icons::glyph(if in_trash { super::icons::Glyph::Restore } else { super::icons::Glyph::Trash }, 26., white));
                     if live {
                         share = share.on_click(cx.listener(|this, _, _, cx| this.share_current(cx)));
-                        trash = trash.on_click(cx.listener(|this, _, _, cx| this.open_trash_dialog(cx)));
+                        trash = if in_trash {
+                            trash.on_click(cx.listener(|this, _, _, cx| this.restore_current(cx)))
+                        } else {
+                            trash.on_click(cx.listener(|this, _, _, cx| this.open_trash_dialog(cx)))
+                        };
                     }
                     // While the confirmation morphs out of the trash button, the button itself is gone.
                     let trash = if v.trash.is_some() { div().w(px(48.)).h(px(48.)).into_any_element() } else { trash.into_any_element() };

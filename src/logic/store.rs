@@ -130,6 +130,13 @@ pub trait Store {
     fn favorite_items(&self) -> Vec<TimelineItem>;
     /// Count and newest favorite (the cover).
     fn favorite_summary(&self) -> (usize, Option<String>);
+    /// Videos of the main timeline (no trash, no archive), newest first.
+    fn video_items(&self) -> Vec<TimelineItem>;
+    /// Trashed assets, newest first. Only what the store holds: a full sync lists with `withDeleted: false`, the
+    /// sync stream delivers trashed assets with `deletedAt`.
+    fn trashed_items(&self) -> Vec<TimelineItem>;
+    /// Archived assets (visibility `archive`, not trashed), newest first.
+    fn archived_items(&self) -> Vec<TimelineItem>;
 
     // Albums
 
@@ -492,6 +499,17 @@ impl MemoryStore {
         found.into_iter().map(|(_, id, row)| timeline_item(id, row)).collect()
     }
 
+    /// Rows passing `keep`, newest first.
+    fn items_where(&self, keep: impl Fn(&AssetRow) -> bool) -> Vec<TimelineItem> {
+        self.timeline_index
+            .iter()
+            .filter_map(|(_, id)| {
+                let row = self.assets.get(id.as_str())?;
+                keep(row).then(|| timeline_item(id, row))
+            })
+            .collect()
+    }
+
     fn visual_keys<'a>(&self, ids: impl Iterator<Item = &'a str>) -> BTreeMap<String, VisualKey> {
         ids.filter_map(|id| self.assets.get(id).map(|row| (id.to_string(), row.visual()))).collect()
     }
@@ -736,6 +754,18 @@ impl Store for MemoryStore {
                 (row.is_favorite && row.in_albums()).then(|| timeline_item(id, row))
             })
             .collect()
+    }
+
+    fn video_items(&self) -> Vec<TimelineItem> {
+        self.items_where(|row| row.in_timeline() && row.asset_type.as_deref() == Some("VIDEO"))
+    }
+
+    fn trashed_items(&self) -> Vec<TimelineItem> {
+        self.items_where(|row| row.is_trashed)
+    }
+
+    fn archived_items(&self) -> Vec<TimelineItem> {
+        self.items_where(|row| !row.is_trashed && row.visibility.as_deref() == Some("archive"))
     }
 
     fn favorite_summary(&self) -> (usize, Option<String>) {
@@ -1472,6 +1502,39 @@ mod tests {
         db.add_album_assets("al", &strings(&["visible", "motion", "archived", "trashed"]));
         let shown: BTreeSet<String> = ids_of(&db.album_assets("al")).into_iter().collect();
         assert_eq!(shown, set(&["visible", "archived"]), "albums show archived photos too");
+    }
+
+    fn kinded(id: &str, kind: &str, visibility: &str, trashed: bool, minutes_ago: i64) -> SyncAsset {
+        SyncAsset { asset_type: Some(kind.to_string()), ..fav_asset(id, false, minutes_ago, visibility, trashed) }
+    }
+
+    #[test]
+    fn videos_trash_and_archive_pages() {
+        let mut db = MemoryStore::new();
+        db.upsert_sync_assets(&[
+            kinded("photo", "IMAGE", "timeline", false, 1),
+            kinded("v-old", "VIDEO", "timeline", false, 30),
+            kinded("v-new", "VIDEO", "timeline", false, 10),
+            kinded("v-archived", "VIDEO", "archive", false, 5),
+            kinded("v-trashed", "VIDEO", "timeline", true, 6),
+            kinded("v-motion", "VIDEO", "hidden", false, 7),
+            kinded("p-archived", "IMAGE", "archive", false, 8),
+            kinded("p-trashed", "IMAGE", "timeline", true, 20),
+            kinded("p-trashed-archived", "IMAGE", "archive", true, 9),
+        ]);
+        assert_eq!(ids_of(&db.video_items()), strings(&["v-new", "v-old"]), "newest first, no archive, trash or motion parts");
+        assert_eq!(ids_of(&db.trashed_items()), strings(&["v-trashed", "p-trashed-archived", "p-trashed"]));
+        assert_eq!(ids_of(&db.archived_items()), strings(&["v-archived", "p-archived"]), "trash wins over archive");
+        // Archived photos are invisible everywhere but the archive page.
+        let timeline = ids_of(&db.fetch_timeline());
+        assert_eq!(timeline, strings(&["photo", "v-new", "v-old"]));
+        for hidden in ["v-archived", "p-archived"] {
+            assert!(!timeline.iter().any(|id| id == hidden));
+            assert!(!ids_of(&db.video_items()).iter().any(|id| id == hidden));
+        }
+        db.untrash_assets(&strings(&["p-trashed"]));
+        assert!(ids_of(&db.trashed_items()).iter().all(|id| id != "p-trashed"));
+        assert!(ids_of(&db.fetch_timeline()).iter().any(|id| id == "p-trashed"));
     }
 
     /// Inside an album the newest photo is on top, the oldest at the bottom, whatever the server's order.
