@@ -132,6 +132,8 @@ pub(crate) fn overlay<V: 'static>(
             .child(
                 div()
                     .id((spec.id, 1usize))
+                    // Without it a tap also reaches the photo layer and toggles the viewer's controls.
+                    .occlude()
                     .absolute()
                     .top_0()
                     .left_0()

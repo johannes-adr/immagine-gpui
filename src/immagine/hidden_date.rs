@@ -183,7 +183,6 @@ impl Immagine {
         );
 
         if h.open {
-            let now = today();
             let draft = h.draft;
             let column = |label: &'static str, field: Field, text: String, width: f32, cx: &mut Context<Self>| -> Div {
                 let step = |up: bool, cx: &mut Context<Self>| {

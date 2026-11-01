@@ -1812,6 +1812,26 @@ mod tests {
             assert!(!v.menu.is_open() && !v.chrome_hidden, "menu closes, controls untouched");
         });
     }
+
+    #[::core::prelude::v1::test]
+    fn tapping_the_menu_scrim_does_not_toggle_the_controls() {
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|w, cx| Immagine::new(0., 0., false, false, w, cx));
+        view.update(cx, |app, cx| {
+            app.screen = super::super::Screen::Timeline;
+            app.open_viewer(Rc::new(photos(3)), 1, cx);
+            let v = app.viewer.as_mut().unwrap();
+            v.chrome_at = 0.;
+            v.menu.open(now_ms() - 1000.);
+        });
+        cx.run_until_parked();
+        cx.simulate_click(point(px(40.), px(300.)), Modifiers::none());
+        view.update(cx, |app, _| {
+            let v = app.viewer.as_ref().unwrap();
+            assert!(!v.menu.is_open(), "the tap closed the menu");
+            assert!(!v.chrome_hidden, "and did not reach the photo");
+        });
+    }
 }
 
 /// Largest video that is loaded into memory to be shared (web memory is 1 GiB and the bytes are copied on the way).

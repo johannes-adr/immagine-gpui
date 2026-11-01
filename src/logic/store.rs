@@ -816,15 +816,15 @@ impl Store for MemoryStore {
     }
 
     fn video_items(&self) -> Vec<TimelineItem> {
-        self.items_where(|row| row.in_timeline() && row.asset_type.as_deref() == Some("VIDEO"))
+        self.items_where(|row| self.shows_in_timeline(row) && row.asset_type.as_deref() == Some("VIDEO"))
     }
 
     fn trashed_items(&self) -> Vec<TimelineItem> {
-        self.items_where(|row| row.is_trashed)
+        self.items_where(|row| row.is_trashed && !self.date_hidden(row))
     }
 
     fn archived_items(&self) -> Vec<TimelineItem> {
-        self.items_where(|row| !row.is_trashed && row.visibility.as_deref() == Some("archive"))
+        self.items_where(|row| !row.is_trashed && row.visibility.as_deref() == Some("archive") && !self.date_hidden(row))
     }
 
     fn favorite_summary(&self) -> (usize, Option<String>) {
@@ -1593,6 +1593,11 @@ mod tests {
             assert!(!timeline.iter().any(|id| id == hidden));
             assert!(!ids_of(&db.video_items()).iter().any(|id| id == hidden));
         }
+        // The date limit applies to these pages too.
+        db.set_hidden_before(i64::MAX);
+        assert!(db.video_items().is_empty() && db.trashed_items().is_empty() && db.archived_items().is_empty());
+        db.set_hidden_before(0);
+        assert_eq!(db.video_items().len(), 2);
         db.untrash_assets(&strings(&["p-trashed"]));
         assert!(ids_of(&db.trashed_items()).iter().all(|id| id != "p-trashed"));
         assert!(ids_of(&db.fetch_timeline()).iter().any(|id| id == "p-trashed"));
