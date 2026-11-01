@@ -347,7 +347,7 @@ impl Immagine {
                                     .flex_row()
                                     .items_center()
                                     .justify_between()
-                                    .child(div().children(item.is_favorite.then(|| super::icons::heart_badge(icon, rgb(0xffffff).into()))))
+                                    .child(div().children(item.is_favorite.then(|| crate::components::icon::heart(icon, rgb(0xffffff).into(), true))))
                                     .child(
                                         div()
                                             .flex()
@@ -364,7 +364,7 @@ impl Immagine {
                                                     .text_size(px(icon))
                                                     .child(text)
                                             }))
-                                            .children(stored.then(|| super::icons::glyph(super::icons::Glyph::Downloaded, icon, rgb(0xffffff).into()))),
+                                            .children(stored.then(|| crate::components::icon::glyph(crate::components::icon::Glyph::Downloaded, icon, rgb(0xffffff).into()))),
                                     )
                             }))
                             .children((selecting && !hidden && cell >= 24.).then(|| {
@@ -372,7 +372,7 @@ impl Immagine {
                                 let d = if cell < 60. { 16. } else { 22. };
                                 let mark = div().absolute().right(px(4.)).bottom(px(4.)).size(px(d)).rounded_full().border_2().flex().items_center().justify_center();
                                 if selected {
-                                    mark.bg(rgb(crate::theme::BLUE)).border_color(rgb(0xffffff)).child(super::icons::glyph(super::icons::Glyph::Check, d * 0.62, rgb(0xffffff).into()))
+                                    mark.bg(rgb(crate::theme::BLUE)).border_color(rgb(0xffffff)).child(crate::components::icon::glyph(crate::components::icon::Glyph::Check, d * 0.62, rgb(0xffffff).into()))
                                 } else {
                                     mark.border_color(rgba(0xffffffe6)).bg(rgba(0x00000026))
                                 }

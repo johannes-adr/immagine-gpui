@@ -39,27 +39,6 @@ impl Default for HiddenState {
     }
 }
 
-/// A chevron stroked into a 20 x 12 box.
-fn chevron(up: bool, color: Rgba) -> Canvas<()> {
-    canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let (x, y): (f32, f32) = (bounds.origin.x.into(), bounds.origin.y.into());
-            let (w, h): (f32, f32) = (bounds.size.width.into(), bounds.size.height.into());
-            let (tip, base) = if up { (y + h * 0.2, y + h * 0.85) } else { (y + h * 0.85, y + h * 0.2) };
-            let mut b = PathBuilder::stroke(px(2.4));
-            b.move_to(point(px(x + w * 0.1), px(base)));
-            b.line_to(point(px(x + w * 0.5), px(tip)));
-            b.line_to(point(px(x + w * 0.9), px(base)));
-            if let Ok(path) = b.build() {
-                window.paint_path(path, color);
-            }
-        },
-    )
-    .w(px(22.))
-    .h(px(13.))
-}
-
 impl Immagine {
     /// The store's cutoff for the current setting (epoch ms, 0 = no limit).
     pub(super) fn hidden_cutoff(&self) -> i64 {
@@ -195,7 +174,7 @@ impl Immagine {
                         .items_center()
                         .justify_center()
                         .active(|s| s.opacity(0.4))
-                        .child(chevron(up, rgb(BLUE)))
+                        .child(crate::components::icon::chevron(if up { crate::components::icon::Dir::Up } else { crate::components::icon::Dir::Down }, rgb(BLUE)))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             if window.tap_caught_fling() {
                                 return;

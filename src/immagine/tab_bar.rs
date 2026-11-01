@@ -3,7 +3,7 @@ use crate::components::glass::glass_div_faded;
 use crate::theme::{Palette, BLUE};
 use crate::components::ease::{anim, lerp};
 use crate::util::now_ms;
-use super::icons::{glyph, Glyph};
+use crate::components::icon::{glyph, Glyph};
 use gpui_kit::*;
 use std::time::Duration;
 

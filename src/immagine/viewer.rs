@@ -732,17 +732,17 @@ impl Immagine {
                 .child(label)
         };
         let (download_icon, download_label) = match (downloaded, downloading) {
-            (true, _) => (super::icons::glyph(super::icons::Glyph::Downloaded, 24., white), "Heruntergeladen".to_string()),
-            (false, Some(f)) => (super::icons::progress_ring(f, 24., white), format!("Lädt … {} %", (f * 100.).round() as u32)),
-            _ => (super::icons::glyph(super::icons::Glyph::Download, 24., white), "Herunterladen".to_string()),
+            (true, _) => (crate::components::icon::glyph(crate::components::icon::Glyph::Downloaded, 24., white), "Heruntergeladen".to_string()),
+            (false, Some(f)) => (crate::components::icon::progress_ring(f, 24., white), format!("Lädt … {} %", (f * 100.).round() as u32)),
+            _ => (crate::components::icon::glyph(crate::components::icon::Glyph::Download, 24., white), "Herunterladen".to_string()),
         };
         let mut download = row("viewer-menu-download", download_icon, download_label);
         let mut archive = row(
             "viewer-menu-archive",
-            super::icons::glyph(super::icons::Glyph::Archive, 24., white),
+            crate::components::icon::glyph(crate::components::icon::Glyph::Archive, 24., white),
             if v.menu_archived { "Aus Archiv holen" } else { "Archivieren" }.to_string(),
         );
-        let mut album = row("viewer-menu-album", super::icons::glyph(super::icons::Glyph::AddToAlbum, 24., white), "Zu Album hinzufügen".to_string());
+        let mut album = row("viewer-menu-album", crate::components::icon::glyph(crate::components::icon::Glyph::AddToAlbum, 24., white), "Zu Album hinzufügen".to_string());
         if open {
             download = download.on_click(cx.listener(|this, _, _, cx| {
                 this.close_more_menu(cx);
@@ -1067,8 +1067,8 @@ impl Immagine {
             Status::Failed(message) => pill.justify_center().child(message.clone()),
             Status::Ready => {
                 let fraction = (p.position_us as f32 / p.duration_us.max(1) as f32).clamp(0., 1.);
-                let mut button = div().id("viewer-play-pause").w(px(32.)).h(px(40.)).flex_none().flex().items_center().justify_center().child(super::icons::glyph(
-                    if p.is_playing() { super::icons::Glyph::Pause } else { super::icons::Glyph::Play },
+                let mut button = div().id("viewer-play-pause").w(px(32.)).h(px(40.)).flex_none().flex().items_center().justify_center().child(crate::components::icon::glyph(
+                    if p.is_playing() { crate::components::icon::Glyph::Pause } else { crate::components::icon::Glyph::Play },
                     24.,
                     white,
                 ));
@@ -1565,21 +1565,21 @@ impl Immagine {
                 .children(info_panel)
                 .children((k > 0.).then(|| {
                     let live = !closing;
-                    let mut fav = div().id("viewer-fav").w(px(52.)).h(px(48.)).flex().items_center().justify_center().child(heart(favorite, k));
-                    let mut info = div().id("viewer-info").w(px(52.)).h(px(48.)).flex().items_center().justify_center().child(super::icons::glyph(super::icons::Glyph::Info, 26., if v.info { Rgba { a: k, ..rgb(BLUE).into() } } else { white }));
+                    let mut fav = div().id("viewer-fav").w(px(52.)).h(px(48.)).flex().items_center().justify_center().child(crate::components::icon::heart(22., Rgba { a: k, ..if favorite { rgb(RED).into() } else { rgb(0xffffff).into() } }, favorite));
+                    let mut info = div().id("viewer-info").w(px(52.)).h(px(48.)).flex().items_center().justify_center().child(crate::components::icon::glyph(crate::components::icon::Glyph::Info, 26., if v.info { Rgba { a: k, ..rgb(BLUE).into() } } else { white }));
                     if live {
                         fav = fav.on_click(cx.listener(|this, _, _, cx| this.toggle_favorite(cx)));
                         info = info.on_click(cx.listener(|this, _, _, cx| this.toggle_info(cx)));
                     }
-                    let mut sliders = div().id("viewer-edit").w(px(52.)).h(px(48.)).flex().items_center().justify_center().child(super::icons::glyph(super::icons::Glyph::Sliders, 26., white));
+                    let mut sliders = div().id("viewer-edit").w(px(52.)).h(px(48.)).flex().items_center().justify_center().child(crate::components::icon::glyph(crate::components::icon::Glyph::Sliders, 26., white));
                     if live && !is_video {
                         sliders = sliders.on_click(cx.listener(|this, _, _, cx| this.open_editor(cx)));
                     }
                     let pill = button("viewer-pill", 164.).child(fav).child(info).child(sliders);
-                    let mut share = button("viewer-share", 48.).child(super::icons::glyph(super::icons::Glyph::Share, 26., white));
+                    let mut share = button("viewer-share", 48.).child(crate::components::icon::glyph(crate::components::icon::Glyph::Share, 26., white));
                     // A photo in the Papierkorb is restored instead of deleted again.
                     let in_trash = v.items.get(v.index).is_some_and(|i| i.is_trashed);
-                    let mut trash = button("viewer-trash", 48.).child(super::icons::glyph(if in_trash { super::icons::Glyph::Restore } else { super::icons::Glyph::Trash }, 26., white));
+                    let mut trash = button("viewer-trash", 48.).child(crate::components::icon::glyph(if in_trash { crate::components::icon::Glyph::Restore } else { crate::components::icon::Glyph::Trash }, 26., white));
                     if live {
                         share = share.on_click(cx.listener(|this, _, _, cx| this.share_current(cx)));
                         trash = if in_trash {
@@ -1638,7 +1638,7 @@ impl Immagine {
                 }))
                 .children((k > 0.).then(|| {
                     let live = !closing;
-                    let mut back = button("viewer-done", 44.).h(px(44.)).active(|s| s.opacity(0.6)).child(super::icons::chevron(white));
+                    let mut back = button("viewer-done", 44.).h(px(44.)).active(|s| s.opacity(0.6)).child(crate::components::icon::chevron(crate::components::icon::Dir::Left, white));
                     if live {
                         back = back.on_click(cx.listener(|this, _, _, cx| this.close_viewer(cx)));
                     }
@@ -1656,9 +1656,9 @@ impl Immagine {
                     // circles the dots. The button itself is gone while the menu morphs out of it.
                     let mut more = button("viewer-more", 44.).h(px(44.)).active(|s| s.opacity(0.6));
                     if let Some(fraction) = downloading {
-                        more = more.child(div().absolute().size_full().flex().items_center().justify_center().child(super::icons::progress_ring(fraction, 38., white)));
+                        more = more.child(div().absolute().size_full().flex().items_center().justify_center().child(crate::components::icon::progress_ring(fraction, 38., white)));
                     }
-                    more = more.child(super::icons::glyph(super::icons::Glyph::More, 24., white));
+                    more = more.child(crate::components::icon::glyph(crate::components::icon::Glyph::More, 24., white));
                     if live {
                         more = more.on_click(cx.listener(|this, _, _, cx| this.open_more_menu(cx)));
                     }
@@ -1682,32 +1682,6 @@ impl Immagine {
                 .into_any_element(),
         )
     }
-}
-
-/// A heart, filled red when `filled`, otherwise a white outline (the font has no heart glyph).
-fn heart(filled: bool, k: f32) -> Canvas<()> {
-    canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let (x, y): (f32, f32) = (bounds.origin.x.into(), bounds.origin.y.into());
-            let scale = f32::from(bounds.size.width) / 24.;
-            let at = |px_: f32, py_: f32| point(px(x + px_ * scale), px(y + py_ * scale));
-            let mut b = if filled { PathBuilder::fill() } else { PathBuilder::stroke(px(1.8)) };
-            b.move_to(at(12., 21.5));
-            b.curve_to(at(2.2, 8.2), at(2., 14.5));
-            b.curve_to(at(7.2, 3.), at(2.5, 3.));
-            b.curve_to(at(12., 6.8), at(10.8, 3.));
-            b.curve_to(at(16.8, 3.), at(13.2, 3.));
-            b.curve_to(at(21.8, 8.2), at(21.5, 3.));
-            b.curve_to(at(12., 21.5), at(22., 14.5));
-            b.close();
-            if let Ok(path) = b.build() {
-                let color: Rgba = if filled { rgb(RED).into() } else { rgb(0xffffff).into() };
-                window.paint_path(path, Rgba { a: k, ..color });
-            }
-        },
-    )
-    .size(px(22.))
 }
 
 #[cfg(test)]

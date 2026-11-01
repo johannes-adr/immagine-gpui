@@ -257,7 +257,7 @@ impl Immagine {
             .items_center()
             .justify_center()
             .active(|s| s.opacity(0.6))
-            .child(super::icons::glyph(super::icons::Glyph::Jobs, 20., p.label))
+            .child(crate::components::icon::glyph(crate::components::icon::Glyph::Jobs, 20., p.label))
             .children((active > 0).then(|| {
                 div()
                     .absolute()

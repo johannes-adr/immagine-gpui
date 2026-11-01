@@ -334,7 +334,7 @@ impl Immagine {
         };
         let name = page.person.display_name().to_string();
 
-        let back = div().flex().flex_row().child(super::icons::back_chip(p.glass_tint, "person-back", rgb(BLUE).into()).on_click(cx.listener(|this, _, _, cx| {
+        let back = div().flex().flex_row().child(crate::components::icon::back_chip(p.glass_tint, "person-back", rgb(BLUE).into()).on_click(cx.listener(|this, _, _, cx| {
             this.people.open = None;
             cx.notify();
         })));

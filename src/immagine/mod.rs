@@ -11,7 +11,6 @@ mod login;
 mod people;
 mod range_views;
 mod slider;
-mod icons;
 mod search;
 mod selection;
 mod scrollbar;

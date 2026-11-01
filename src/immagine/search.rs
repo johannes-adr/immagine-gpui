@@ -4,7 +4,7 @@
 //! Smart search results keep the server's relevance order; filename results are newest first.
 //! The field lives in a glass bar at the bottom (Apple Photos look) that rides above the keyboard.
 
-use super::icons::{glyph, Glyph};
+use crate::components::icon::{glyph, Glyph};
 use super::people::Load;
 use super::Immagine;
 use crate::components::glass::glass_div;

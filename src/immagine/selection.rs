@@ -10,7 +10,7 @@
 //! the same path through window listeners (`sel_input`); a drag that painted must not also click the tile it ends
 //! on (`swallow_click`).
 
-use super::icons::{glyph, Glyph};
+use crate::components::icon::{glyph, Glyph};
 use super::{Immagine, Screen};
 use crate::components::glass::{glass_div_faded, glass_div_with};
 use crate::host::Pinch;

@@ -57,8 +57,8 @@ impl Special {
     }
 
     /// Glyph for an empty tile; the hidden Archiviert slot shows none.
-    fn glyph(self) -> Option<super::icons::Glyph> {
-        use super::icons::Glyph;
+    fn glyph(self) -> Option<crate::components::icon::Glyph> {
+        use crate::components::icon::Glyph;
         match self {
             Special::Videos => Some(Glyph::Play),
             Special::Trash => Some(Glyph::Trash),
@@ -393,7 +393,7 @@ impl Immagine {
             Some(special) if open.items.is_empty() => special.empty().to_string(),
             _ => count_label(open.items.len(), "Foto", "Fotos"),
         };
-        let back = div().flex().flex_row().child(super::icons::back_chip(p.glass_tint, "album-back", rgb(BLUE).into()).on_click(cx.listener(|this, _, _, cx| this.close_album(cx))));
+        let back = div().flex().flex_row().child(crate::components::icon::back_chip(p.glass_tint, "album-back", rgb(BLUE).into()).on_click(cx.listener(|this, _, _, cx| this.close_album(cx))));
         let header = div()
             .px(px(PAD))
             .pt(px(20.))
@@ -516,7 +516,7 @@ impl Immagine {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .children(special.glyph().filter(|_| picture.is_none()).map(|g| super::icons::glyph(g, 40., p.secondary)))
+                    .children(special.glyph().filter(|_| picture.is_none()).map(|g| crate::components::icon::glyph(g, 40., p.secondary)))
                     .children(picture.map(|image| img(image).size_full().object_fit(ObjectFit::Cover)));
                 let (one, many) = if special == Special::Videos { ("Video", "Videos") } else { ("Foto", "Fotos") };
                 extras.push(
@@ -547,7 +547,7 @@ impl Immagine {
             let parent = AlbumPath::parent_of(&st.path);
             header = header.child(
                 div().flex().flex_row().child(
-                    super::icons::back_chip(p.glass_tint, "albums-up", rgb(BLUE).into()).on_click(cx.listener(move |this, _, _, cx| this.go_to_folder(parent.clone(), cx))),
+                    crate::components::icon::back_chip(p.glass_tint, "albums-up", rgb(BLUE).into()).on_click(cx.listener(move |this, _, _, cx| this.go_to_folder(parent.clone(), cx))),
                 ),
             );
             let mut crumbs = div().flex().flex_row().flex_wrap().gap_1().text_size(px(15.)).text_color(p.secondary);
@@ -590,7 +590,7 @@ impl Immagine {
                             .items_center()
                             .justify_center()
                             .active(|s| s.opacity(0.6))
-                            .child(super::icons::glyph(super::icons::Glyph::Gear, 20., p.label))
+                            .child(crate::components::icon::glyph(crate::components::icon::Glyph::Gear, 20., p.label))
                             .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
                     ),
             )

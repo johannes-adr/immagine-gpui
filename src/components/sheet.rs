@@ -8,6 +8,7 @@
 //! wired by `overlay` itself). `open`/`close` start the animations.
 
 use crate::components::glass::glass_div_with;
+use crate::components::icon::{glyph, Glyph};
 use crate::components::clock::now_ms;
 use crate::components::ease::{ease_out, lerp};
 use gpui_kit::*;
@@ -187,7 +188,7 @@ pub(crate) fn overlay<V: 'static>(
         .items_center()
         .justify_center()
         .active(|s| s.opacity(0.6))
-        .child(cross(label))
+        .child(glyph(Glyph::Close, 20., label))
         .on_click(cx.listener(move |this, _, _, cx| close(this, cx)));
     let panel = div()
         .id("sheet-panel")
@@ -252,24 +253,4 @@ pub(crate) fn overlay<V: 'static>(
         )
         .child(panel)
         .into_any_element()
-}
-
-/// The "x" of the close circle.
-fn cross(color: Rgba) -> Canvas<()> {
-    canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let (x, y): (f32, f32) = (bounds.origin.x.into(), bounds.origin.y.into());
-            let k = f32::from(bounds.size.width) / 16.;
-            for ((x0, y0), (x1, y1)) in [((2., 2.), (14., 14.)), ((14., 2.), (2., 14.))] {
-                let mut b = PathBuilder::stroke(px(1.9 * k));
-                b.move_to(point(px(x + x0 * k), px(y + y0 * k)));
-                b.line_to(point(px(x + x1 * k), px(y + y1 * k)));
-                if let Ok(path) = b.build() {
-                    window.paint_path(path, color);
-                }
-            }
-        },
-    )
-    .size(px(16.))
 }
