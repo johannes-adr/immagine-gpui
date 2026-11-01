@@ -3,9 +3,17 @@
 //! * HTTP: `ureq` on a worker thread per request, one shared agent so the Immich cookie persists.
 //! * Persistence: plain files below [`data_dir`].
 //! * Images: downloaded and decoded with the `image` crate on a worker thread.
-//! * No video decoder and no audio output: `video_decoder` and `audio_output` return `None`. `install_gestures` reports
-//!   pinch and raw touches from GPUI's touch observer (iOS only, see `gestures`); mouse and trackpad arrive through GPUI itself.
+//! * Video and audio: macOS and iOS decode H.264 with VideoToolbox and AAC with AudioToolbox (`apple_video`,
+//!   `apple_audio`); other desktops have no decoder, `video_decoder` and `audio_output` return `None`.
+//!   `install_gestures` reports pinch and raw touches from GPUI's touch observer (iOS only, see `gestures`); mouse and
+//!   trackpad arrive through GPUI itself.
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod apple_audio;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod apple_ffi;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod apple_video;
 mod blocking;
 mod gestures;
 pub mod entry;
@@ -27,6 +35,15 @@ impl Clock for SystemTimeClock {
 
 pub struct Desktop;
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+type VideoImpl = apple_video::AppleVideoDecoder;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+type AudioImpl = apple_audio::AppleAudioOut;
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+type VideoImpl = NoVideoDecoder;
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+type AudioImpl = NoAudioOut;
+
 /// Server root: the one saved at login, else `IMMICH_URL`, else the same default `serve.py` proxies to.
 fn server_origin() -> String {
     store::setting_get("immagine.server")
@@ -40,8 +57,8 @@ fn server_origin() -> String {
 impl Host for Desktop {
     type Transport = http::UreqTransport;
     type Clock = SystemTimeClock;
-    type VideoDecoder = NoVideoDecoder;
-    type AudioOut = NoAudioOut;
+    type VideoDecoder = VideoImpl;
+    type AudioOut = AudioImpl;
     type Gestures = gestures::GestureHandle;
 
     fn transport() -> Self::Transport {
@@ -182,12 +199,12 @@ impl Host for Desktop {
         blocking::run(move || http::get_range(&url, start, end_inclusive)).await
     }
 
-    fn video_decoder(_config: VideoConfig, _on_frame: impl Fn(i64, Decoded) + 'static) -> Option<Self::VideoDecoder> {
-        None
+    fn video_decoder(config: VideoConfig, on_frame: impl Fn(i64, Decoded) + 'static) -> Option<Self::VideoDecoder> {
+        VideoImpl::create(config, on_frame)
     }
 
     fn audio_output() -> Option<Self::AudioOut> {
-        None
+        AudioImpl::create()
     }
 
     fn install_gestures(on_event: impl Fn(Pinch) + 'static) -> Option<Self::Gestures> {
@@ -195,11 +212,27 @@ impl Host for Desktop {
     }
 }
 
-// There is no decoder on the desktop yet (`video_decoder`/`audio_output` return `None`), so these are never built.
-/// Uninhabited: the desktop has no video decoder.
+// Platforms without a decoder (`video_decoder`/`audio_output` return `None`) use these; they are never built.
+/// Uninhabited: no video decoder on this platform.
+#[cfg_attr(any(target_os = "macos", target_os = "ios"), allow(dead_code))]
 pub enum NoVideoDecoder {}
-/// Uninhabited: the desktop has no audio output.
+/// Uninhabited: no audio output on this platform.
+#[cfg_attr(any(target_os = "macos", target_os = "ios"), allow(dead_code))]
 pub enum NoAudioOut {}
+
+#[cfg_attr(any(target_os = "macos", target_os = "ios"), allow(dead_code))]
+impl NoVideoDecoder {
+    fn create(_: VideoConfig, _: impl Fn(i64, Decoded) + 'static) -> Option<Self> {
+        None
+    }
+}
+
+#[cfg_attr(any(target_os = "macos", target_os = "ios"), allow(dead_code))]
+impl NoAudioOut {
+    fn create() -> Option<Self> {
+        None
+    }
+}
 
 impl VideoDecode for NoVideoDecoder {
     fn decode(&self, _: &Chunk) {

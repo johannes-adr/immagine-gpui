@@ -5,7 +5,7 @@
 //! no `web_sys`/`wasm_bindgen` outside `host/web`, no filesystem or HTTP-client crates outside `host/desktop`.
 //!
 //! * `web` (wasm32): `fetch`, IndexedDB, `localStorage`, `createImageBitmap`, WebCodecs + WebAudio, pointer events.
-//! * `desktop` (everything else): `ureq`, files under the user's data dir, the `image` crate.
+//! * `desktop` (everything else): `ureq`, files under the user's data dir, the `image` crate; on macOS and iOS also VideoToolbox + AudioToolbox for video.
 //!
 //! Dispatch is static (`Current` is selected by `cfg`), so the traits can use `async fn` and need no `Send`.
 
@@ -224,7 +224,7 @@ pub trait Host: 'static {
     /// that ignores the header answers with the whole file (`partial == false`).
     async fn fetch_range(url: &str, start: u64, end_inclusive: u64) -> Result<RangeResponse, String>;
     /// A video decoder for `config`; every decoded picture (presentation order, scaled to a sane size) goes to
-    /// `on_frame` with its timestamp in microseconds. `None` if the platform has no video decoder (desktop).
+    /// `on_frame` with its timestamp in microseconds. `None` if the platform has no video decoder (desktop other than macOS/iOS).
     fn video_decoder(config: VideoConfig, on_frame: impl Fn(i64, Decoded) + 'static) -> Option<Self::VideoDecoder>;
     /// The audio output. Must be called from a user gesture (the browser only unlocks sound then). `None` if the
     /// platform has none.
