@@ -6,7 +6,7 @@
 //! another layer owns the gesture).
 
 use crate::logic::rubber_band::{Phase, RubberBand as Band};
-use crate::util::now_ms;
+use crate::components::clock::now_ms;
 use gpui_kit::*;
 use std::cell::Cell;
 

@@ -167,6 +167,7 @@ impl Immagine {
     }
 
     pub(crate) fn new(top: f32, bottom: f32, dark: bool, webgpu: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        crate::components::clock::install(crate::util::now_ms);
         let initial_server = H::origin();
         let server = cx.new(|cx| {
             let mut state = InputState::new(window, cx).placeholder("Server, z. B. https://immich.example.com");

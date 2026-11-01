@@ -8,7 +8,8 @@
 //! wired by `overlay` itself). `open`/`close` start the animations.
 
 use crate::components::glass::glass_div_with;
-use crate::util::{lerp, now_ms};
+use crate::components::clock::now_ms;
+use crate::components::ease::{ease_out, lerp};
 use gpui_kit::*;
 use std::cell::Cell;
 
@@ -48,10 +49,6 @@ struct State {
 
 #[derive(Default)]
 pub(crate) struct Sheet(Cell<State>);
-
-fn ease_out(t: f32, power: i32) -> f32 {
-    1. - (1. - t).powi(power)
-}
 
 impl Sheet {
     fn edit(&self, f: impl FnOnce(&mut State)) {

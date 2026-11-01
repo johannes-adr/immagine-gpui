@@ -4,7 +4,7 @@ mod tab_bar;
 
 use crate::components::fps::{fps_badge, FpsMeter};
 use crate::theme::Palette;
-use crate::util::{anim, lerp};
+use crate::components::ease::{anim, lerp};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 use photos::{Viewer, PHOTO_COUNT};

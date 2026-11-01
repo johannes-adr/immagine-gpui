@@ -1,7 +1,7 @@
 use super::Todos;
 use crate::components::glass::glass_div;
 use crate::theme::{Palette, BLUE};
-use crate::util::{lerp, spring_out};
+use crate::components::ease::{lerp, spring_out};
 use gpui_kit::*;
 use std::time::Duration;
 

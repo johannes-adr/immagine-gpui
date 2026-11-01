@@ -3,7 +3,7 @@ mod viewer;
 use super::Todos;
 use crate::components::photo::photo;
 use crate::theme::Palette;
-use crate::util::anim;
+use crate::components::ease::anim;
 use gpui_kit::*;
 
 pub(crate) use viewer::Viewer;

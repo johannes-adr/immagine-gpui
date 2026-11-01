@@ -9,7 +9,7 @@
 //! screen coordinates.
 
 use crate::components::glass::glass_div_with;
-use crate::util::lerp;
+use crate::components::ease::lerp;
 use gpui_kit::*;
 use std::time::Duration;
 

@@ -1,4 +1,4 @@
-use crate::util::now_ms;
+use crate::components::clock::now_ms;
 use gpui_kit::*;
 use std::cell::Cell;
 use std::rc::Rc;
