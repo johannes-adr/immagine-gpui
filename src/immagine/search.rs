@@ -61,13 +61,15 @@ pub(super) struct SearchState {
     pub(super) scroll: UniformListScrollHandle,
 }
 
-async fn run_query(origin: &str, token: &str, query: &str, mode: Mode, kind: Kind) -> Result<Vec<TimelineItem>, ClientError> {
+/// `cutoff`: the "show photos from" limit (epoch ms, 0 = none), sent as `takenAfter` and applied locally as well.
+async fn run_query(origin: &str, token: &str, query: &str, mode: Mode, kind: Kind, cutoff: i64) -> Result<Vec<TimelineItem>, ClientError> {
+    let taken_after = crate::logic::hidden_before::taken_after_of(cutoff);
     let client = ImmichClient::new(origin, H::transport())?;
     let mut items: Vec<TimelineItem> = Vec::new();
     for page in 1..=MAX_PAGES {
         let answer = match mode {
-            Mode::Context => client.smart_search(query, kind.api(), page, PAGE, token).await?,
-            Mode::Filename => client.filename_search(query, kind.api(), page, PAGE, token).await?,
+            Mode::Context => client.smart_search(query, kind.api(), taken_after.as_deref(), page, PAGE, token).await?,
+            Mode::Filename => client.filename_search(query, kind.api(), taken_after.as_deref(), page, PAGE, token).await?,
         };
         let got = answer.assets.items.len();
         items.extend(answer.assets.items.iter().map(|asset| asset.timeline_item()));
@@ -75,7 +77,7 @@ async fn run_query(origin: &str, token: &str, query: &str, mode: Mode, kind: Kin
             break;
         }
     }
-    items.retain(|item| !item.is_trashed);
+    items.retain(|item| !item.is_trashed && !crate::logic::hidden_before::hides_iso(item.sort_date.as_deref(), cutoff));
     if mode == Mode::Filename {
         items.sort_by(|a, b| b.sort_date.cmp(&a.sort_date));
     }
@@ -137,7 +139,7 @@ impl Immagine {
         .detach();
     }
 
-    fn start_search(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn start_search(&mut self, cx: &mut Context<Self>) {
         let query = self.query(cx);
         self.search.serial += 1;
         let serial = self.search.serial;
@@ -148,10 +150,11 @@ impl Immagine {
             return;
         }
         self.search.status = Load::Loading;
-        let (origin, token, mode, kind) = (self.origin.clone(), self.token.clone(), self.search.mode, self.search.kind);
+        let (origin, token, mode, kind, cutoff) =
+            (self.origin.clone(), self.token.clone(), self.search.mode, self.search.kind, self.hidden_cutoff());
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = run_query(&origin, &token, &query, mode, kind).await;
+            let result = run_query(&origin, &token, &query, mode, kind, cutoff).await;
             let _ = this.update(cx, |t, cx| {
                 if t.search.serial != serial {
                     return;

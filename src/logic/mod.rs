@@ -8,6 +8,7 @@ pub mod client;
 pub mod crop_geometry;
 pub mod display_image;
 pub mod grid;
+pub mod hidden_before;
 pub mod iso_date;
 pub mod jobs;
 pub mod json;

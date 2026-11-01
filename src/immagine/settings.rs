@@ -22,6 +22,7 @@ pub(super) struct SettingsState {
     /// the scrim).
     scroll: ScrollHandle,
     pub(super) rubber: RubberBand,
+    pub(super) hidden: super::hidden_date::HiddenState,
 }
 
 /// Entry count and bytes of one blob db.
@@ -99,6 +100,7 @@ impl Immagine {
 
     pub(super) fn open_settings(&mut self, cx: &mut Context<Self>) {
         self.settings.sheet.open();
+        self.hidden_on_open();
         cx.notify();
         cx.spawn(async move |this, cx| {
             let (store, _) = usage(DB).await;
@@ -205,6 +207,7 @@ impl Immagine {
                 row(p, "Video-Cache", usage_text(st.video), false),
             ],
         );
+        let display = group(card, "Anzeige", p, self.hidden_rows(p, cx));
         let native = info.as_ref().is_some_and(|i| i.native);
         let mut app_rows = Vec::new();
         if native {
@@ -278,6 +281,7 @@ impl Immagine {
             .flex()
             .flex_col()
             .gap_6()
+            .child(display)
             .child(storage)
             .child(app)
             .child(debug_group)
