@@ -85,7 +85,7 @@ impl Immagine {
         }
         let want = if self.tab != 0 || self.screen != Screen::Timeline {
             false
-        } else if self.range_mode != 2 || self.grid_zooming() {
+        } else if self.range_mode != 2 || self.grid_zooming() || self.scrollbar.dragging() {
             // Jahre / Monate have no "newest end" to come back to: the bar stays until the Mediathek button.
             // While the grid zooms the scroll position follows the zoom, not the user.
             self.range_bar

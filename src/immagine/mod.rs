@@ -12,6 +12,7 @@ mod slider;
 mod icons;
 mod search;
 mod selection;
+mod scrollbar;
 mod jobs;
 mod settings;
 mod tab_bar;
@@ -143,6 +144,7 @@ pub(crate) struct Immagine {
     jobs: jobs::JobsState,
     downloads: downloads::Downloads,
     select: selection::SelectState,
+    scrollbar: scrollbar::ScrollbarState,
 }
 
 /// The timeline is stored newest first; the grid reads oldest first, so the newest photos sit at the bottom.
@@ -276,6 +278,7 @@ impl Immagine {
             jobs: Default::default(),
             downloads,
             select: Default::default(),
+            scrollbar: Default::default(),
         };
         this.resume(cx);
         this.ensure_gestures(cx);
@@ -535,6 +538,7 @@ impl Render for Immagine {
         self.grid_tick(window);
         self.select_check();
         self.sel_tick(window);
+        self.sb_check();
         let background = if self.dark { rgb(0x000000) } else { rgb(0xffffff) };
         let content = match self.screen {
             Screen::Loading => div().into_any_element(),
@@ -562,6 +566,7 @@ impl Render for Immagine {
                 self.bars(&p, window, cx)
             }
         });
+        let scrollbar = if self.screen == Screen::Timeline { self.sb_layer(&p, cx) } else { None };
         let viewer = if self.screen == Screen::Timeline { self.viewer_overlay(window, cx) } else { None };
         let select_overlay = if self.screen == Screen::Timeline && self.select.on { self.sel_overlay(&p, cx) } else { None };
         let settings = if self.screen == Screen::Timeline { self.settings_overlay(&p, window, cx) } else { None };
@@ -573,8 +578,10 @@ impl Render for Immagine {
             .bg(background)
             .text_color(p.label)
             .child(content)
+            .children(scrollbar)
             .child(self.grid_input(cx))
             .child(self.sel_input(cx))
+            .child(self.sb_input(cx))
             .child(rubber_band::input(cx.weak_entity(), |this, dy, phase, window| {
                 // While the grid zooms, the first finger of the pinch must not also scroll the list or start a fling.
                 if this.grid_zooming() {
@@ -582,7 +589,7 @@ impl Render for Immagine {
                     return (true, false);
                 }
                 // Swipe-to-select: the finger paints, the list must not scroll along (it auto-scrolls itself).
-                if this.select.painting() {
+                if this.select.painting() || this.scrollbar.dragging() {
                     window.cancel_touch_momentum();
                     return (true, false);
                 }
