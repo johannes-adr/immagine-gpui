@@ -187,8 +187,8 @@ impl Host for Desktop {
         Ok(bytes)
     }
 
-    async fn share_file(name: &str, mime: &str, bytes: Vec<u8>) -> Result<(), String> {
-        share::share(name, mime, bytes).await
+    async fn share_files(files: Vec<crate::host::ShareFile>) -> Result<(), String> {
+        share::share(files).await
     }
 
     async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {

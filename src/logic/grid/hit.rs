@@ -1,5 +1,5 @@
 //! Hit-testing of the timeline grid as the app lays it out (rows of `columns` tiles, each row centered, `row_h`
-//! apart, with `top_rows` empty rows above the first photo row) and the auto-scroll speed of swipe-to-select.
+//! apart, with `top_rows` empty rows above the first photo row; only the first row can be short, see `head_gap`) and the auto-scroll speed of swipe-to-select.
 //! The Swift counterpart is `TimelineGridLayout.index(at:)` and `updateAutoScroll` in `TimelineGrid.swift`.
 
 /// Distance from the visible top/bottom edge within which a painting finger scrolls the grid.
@@ -36,9 +36,19 @@ impl HitGeom {
         self.count > 0 && self.columns > 0 && self.cell > 0. && self.row_h() > 0.
     }
 
+    /// Empty cells before the first photo.
+    pub fn skip(&self) -> usize {
+        super::layout::head_gap(self.count, self.columns)
+    }
+
+    /// Index of the first photo of photo row `row`.
+    pub fn first_of_row(&self, row: usize) -> usize {
+        (row * self.columns).saturating_sub(self.skip())
+    }
+
     /// Tiles in photo row `row` and the x of the first one (rows are centered).
     fn row_layout(&self, row: usize) -> (usize, f32) {
-        let n = self.columns.min(self.count.saturating_sub(row * self.columns)).max(1);
+        let n = if row == 0 { self.columns - self.skip() } else { self.columns }.max(1);
         let w = n as f32 * self.cell + (n - 1) as f32 * self.gap;
         (n, (self.width - w) / 2.)
     }
@@ -50,7 +60,7 @@ impl HitGeom {
         }
         let global = (content_y / self.row_h()).floor() as usize;
         let row = global.checked_sub(self.top_rows)?;
-        if row * self.columns >= self.count {
+        if row * self.columns >= self.count + self.skip() {
             return None;
         }
         if content_y - global as f32 * self.row_h() > self.cell {
@@ -65,7 +75,7 @@ impl HitGeom {
         if col >= n || rel - col as f32 * (self.cell + self.gap) > self.cell {
             return None;
         }
-        Some(row * self.columns + col)
+        Some(self.first_of_row(row) + col)
     }
 
     /// The photo nearest to the point: above the first row the first photo, below the last one the last photo,
@@ -75,11 +85,11 @@ impl HitGeom {
             return None;
         }
         let global = (content_y.max(0.) / self.row_h()).floor() as usize;
-        let last_row = (self.count - 1) / self.columns;
+        let last_row = (self.count + self.skip() - 1) / self.columns;
         let row = global.saturating_sub(self.top_rows).min(last_row);
         let (n, x0) = self.row_layout(row);
         let col = (((x - x0) / (self.cell + self.gap)).floor().max(0.) as usize).min(n - 1);
-        Some((row * self.columns + col).min(self.count - 1))
+        Some((self.first_of_row(row) + col).min(self.count - 1))
     }
 }
 
@@ -101,8 +111,8 @@ mod tests {
     use super::*;
 
     fn geom() -> HitGeom {
-        // 100 wide, 3 columns of 32 with 2 gap: 32*3 + 2*2 = 100. 8 photos: rows of 3, 3, 2. Two empty rows above.
-        HitGeom { width: 100., count: 8, columns: 3, cell: 32., gap: 2., top_rows: 2, top: 50. }
+        // 100 wide, 3 columns of 32 with 2 gap: 32*3 + 2*2 = 100. 9 photos: rows of 3, 3, 3. Two empty rows above.
+        HitGeom { width: 100., count: 9, columns: 3, cell: 32., gap: 2., top_rows: 2, top: 50. }
     }
 
     #[test]
@@ -120,16 +130,20 @@ mod tests {
     }
 
     #[test]
-    fn the_short_last_row_is_centered() {
-        let g = geom();
-        let last = (2. + 2.) * g.row_h() + 5.;
+    fn the_short_first_row_is_centered() {
+        let g = HitGeom { count: 8, ..geom() };
+        let first = 2. * g.row_h() + 5.;
         // two tiles: 32 + 2 + 32 = 66 wide, starting at x = 17
-        assert_eq!(g.item_at(5., last), None);
-        assert_eq!(g.item_at(20., last), Some(6));
-        assert_eq!(g.item_at(60., last), Some(7));
-        assert_eq!(g.item_at(90., last), None);
-        assert_eq!(g.nearest(2., last), Some(6));
-        assert_eq!(g.nearest(99., last), Some(7));
+        assert_eq!(g.item_at(5., first), None);
+        assert_eq!(g.item_at(20., first), Some(0));
+        assert_eq!(g.item_at(60., first), Some(1));
+        assert_eq!(g.item_at(90., first), None);
+        assert_eq!(g.nearest(2., first), Some(0));
+        assert_eq!(g.nearest(99., first), Some(1));
+        // The rows below are full and go on from there.
+        assert_eq!(g.item_at(5., first + g.row_h()), Some(2));
+        assert_eq!(g.item_at(95., first + 2. * g.row_h()), Some(7));
+        assert_eq!(g.item_at(5., first + 3. * g.row_h()), None, "below the last row");
     }
 
     #[test]
@@ -137,7 +151,7 @@ mod tests {
         let g = geom();
         assert_eq!(g.nearest(5., -100.), Some(0), "above everything");
         assert_eq!(g.nearest(50., 3. * g.row_h()), Some(4), "a gap resolves to the row's tile");
-        assert_eq!(g.nearest(99., 100_000.), Some(7), "below everything: the last photo");
+        assert_eq!(g.nearest(99., 100_000.), Some(8), "below everything: the last photo");
         assert_eq!(g.nearest(-20., 2. * g.row_h() + 5.), Some(0));
         assert_eq!(HitGeom::default().nearest(1., 1.), None);
     }

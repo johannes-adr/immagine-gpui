@@ -71,6 +71,37 @@ impl Immagine {
     }
 }
 
+/// The file of an asset: a video is the H.264 version the player streams (the original may be HEVC, which it cannot
+/// play), a photo its original.
+pub(super) fn asset_url(origin: &str, id: &str, video: bool) -> String {
+    let base = format!("{origin}/api/assets/{id}");
+    if video { format!("{base}/video/playback") } else { format!("{base}/original?edited=true") }
+}
+
+/// Downloads `url` in pieces. `piece(received, total)` runs before each further piece and can stop (`Ok(false)`, the
+/// result is then `None`) or fail. A server that ignores `Range` sends everything at once, without any `piece` call.
+pub(super) async fn fetch_ranged(
+    cx: &mut AsyncApp,
+    url: &str,
+    mut piece: impl FnMut(&mut AsyncApp, u64, u64) -> Result<bool, String>,
+) -> Result<Option<Vec<u8>>, String> {
+    let first = H::fetch_range(url, 0, CHUNK - 1).await?;
+    let total = first.total.filter(|_| first.partial);
+    let mut bytes = first.bytes;
+    while let Some(total) = total.filter(|t| (bytes.len() as u64) < *t) {
+        if !piece(cx, bytes.len() as u64, total)? {
+            return Ok(None);
+        }
+        let start = bytes.len() as u64;
+        let next = H::fetch_range(url, start, (start + CHUNK).min(total) - 1).await?;
+        if next.bytes.is_empty() {
+            return Err("Download unvollständig".to_string());
+        }
+        bytes.extend(next.bytes);
+    }
+    Ok(Some(bytes))
+}
+
 /// How a download ended.
 pub(super) enum Fetched {
     /// Stored with this many bytes (the original; thumbnail and preview not counted).
@@ -91,8 +122,7 @@ pub(super) async fn fetch_and_store(
     keep_going: impl Fn(&Immagine) -> bool,
 ) -> Result<Fetched, String> {
     let base = format!("{origin}/api/assets/{id}");
-    // A video is stored as the H.264 version the player streams (the original may be HEVC, which it cannot play).
-    let url = if video { format!("{base}/video/playback") } else { format!("{base}/original?edited=true") };
+    let url = asset_url(origin, id, video);
     let progress = |cx: &mut AsyncApp, value: Option<f32>| {
         let _ = this.update(cx, |t, cx| {
             match value {
@@ -115,22 +145,15 @@ pub(super) async fn fetch_and_store(
                 let _ = H::blob_put(DOWNLOAD_DB, &format!("{key}:{id}"), &bytes).await;
             }
         }
-        let first = H::fetch_range(&url, 0, CHUNK - 1).await?;
-        let total = first.total.filter(|_| first.partial);
-        let mut bytes = first.bytes;
-        // A server that ignored `Range` sent everything at once.
-        while let Some(total) = total.filter(|t| (bytes.len() as u64) < *t) {
+        let fetched = fetch_ranged(cx, &url, |cx, done, total| {
             if !go(cx) {
-                return Ok(Fetched::Stopped);
+                return Ok(false);
             }
-            progress(cx, Some(bytes.len() as f32 / total as f32));
-            let start = bytes.len() as u64;
-            let piece = H::fetch_range(&url, start, (start + CHUNK).min(total) - 1).await?;
-            if piece.bytes.is_empty() {
-                return Err("Download unvollständig".to_string());
-            }
-            bytes.extend(piece.bytes);
-        }
+            progress(cx, Some(done as f32 / total as f32));
+            Ok(true)
+        })
+        .await?;
+        let Some(bytes) = fetched else { return Ok(Fetched::Stopped) };
         H::blob_put(DOWNLOAD_DB, id, &bytes).await?;
         Ok(Fetched::Stored(bytes.len() as u64))
     }

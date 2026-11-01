@@ -22,6 +22,7 @@ use crate::logic::store::Store;
 use crate::theme::{BLUE, RED};
 use crate::components::ease::{anim, lerp};
 use crate::util::now_ms;
+use super::share::ShareFrom;
 use super::video_player::{fmt_time, Player, Status};
 use crate::host::{Current as H, Host, Pinch};
 use gpui_kit::*;
@@ -782,62 +783,9 @@ impl Immagine {
     // MARK: - Share
 
     fn share_current(&mut self, cx: &mut Context<Self>) {
-        let (origin, token) = (self.origin.clone(), self.token.clone());
-        let Some(item) = self.viewer.as_ref().filter(|v| !v.closing).and_then(|v| v.items.get(v.index)) else { return };
-        let id = item.id.clone();
-        let video = item.is_video();
-        // A stored download (original, or the H.264 file of a video) is shared from disk, no request.
-        let stored = self.downloads.ids.borrow().contains(&id);
-        self.status = if video && !stored { "Lade Video zum Teilen …".into() } else { "Bereite zum Teilen vor …".into() };
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = async {
-                let client = ImmichClient::new(&origin, H::transport()).map_err(|e| e.to_string())?;
-                // Name and size come from the asset record; without it the file gets a generic name.
-                let details = client.asset(&id, &token).await.ok();
-                let local = if stored { H::blob_get(super::downloads::DOWNLOAD_DB, &id).await.ok().flatten().filter(|b| !b.is_empty()) } else { None };
-                let bytes = match local {
-                    Some(b) => b,
-                    None if video => {
-                        let too_big = || format!("Das Video ist größer als {} MB und lässt sich nicht teilen.", SHARE_MAX_BYTES / 1_000_000);
-                        if details.as_ref().and_then(|a| a.exif_info.as_ref()).and_then(|e| e.file_size_in_byte).is_some_and(|n| n > SHARE_MAX_BYTES as i64) {
-                            return Err(too_big());
-                        }
-                        let url = client.video_playback_url(&id);
-                        // The probe tells the size of the (transcoded) file; a server that ignores Range sends it all.
-                        let probe = H::fetch_range(&url, 0, 0).await?;
-                        if !probe.partial {
-                            probe.bytes
-                        } else {
-                            if probe.total.is_some_and(|n| n > SHARE_MAX_BYTES) {
-                                return Err(too_big());
-                            }
-                            H::fetch_bytes(&url).await?
-                        }
-                    }
-                    None => client.original(&id, &token).await.map_err(|e| e.to_string())?,
-                };
-                let (name, mime) = share_name(details.as_ref().and_then(|a| a.original_file_name.as_deref()), &bytes, video);
-                // The sheet is about to open: the busy text goes now, not when it is dismissed.
-                this.update(cx, |t, cx| {
-                    t.status = String::new();
-                    cx.notify();
-                })
-                .ok();
-                H::share_file(&name, mime, bytes).await
-            }
-            .await;
-            this.update(cx, |t, cx| {
-                t.status = match result {
-                    // Dismissing the share sheet is reported as an error too; nothing to tell the user then.
-                    Err(e) if !e.contains("AbortError") => e,
-                    _ => String::new(),
-                };
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        let Some(item) = self.viewer_item() else { return };
+        let from = ShareFrom::Viewer(item.id.clone());
+        self.share_assets(vec![item], from, cx);
     }
 
     // MARK: - Crop editor
@@ -1321,6 +1269,7 @@ impl Immagine {
         let current_id = current.as_ref().map(|i| i.id.clone()).unwrap_or_default();
         let downloaded = self.downloads.ids.borrow().contains(&current_id);
         let downloading = self.downloads.busy.get(&current_id).copied();
+        let sharing = self.share_fraction(&ShareFrom::Viewer(current_id.clone()));
         let playing = v.video.is_some();
         let bottom = self.bottom.max(10.);
 
@@ -1554,7 +1503,11 @@ impl Immagine {
                         sliders = sliders.on_click(cx.listener(|this, _, _, cx| this.open_editor(cx)));
                     }
                     let pill = button("viewer-pill", 164.).child(fav).child(info).child(sliders);
-                    let mut share = button("viewer-share", 48.).child(crate::components::icon::glyph(crate::components::icon::Glyph::Share, 26., white));
+                    // While the file is on its way the button shows how far; a tap on it cancels.
+                    let mut share = button("viewer-share", 48.).child(match sharing {
+                        Some(fraction) => crate::components::icon::progress_ring(fraction, 26., white),
+                        None => crate::components::icon::glyph(crate::components::icon::Glyph::Share, 26., white),
+                    });
                     // A photo in the Papierkorb is restored instead of deleted again.
                     let in_trash = v.items.get(v.index).is_some_and(|i| i.is_trashed);
                     let mut trash = button("viewer-trash", 48.).child(crate::components::icon::glyph(if in_trash { crate::components::icon::Glyph::Restore } else { crate::components::icon::Glyph::Trash }, 26., white));
@@ -1660,17 +1613,6 @@ impl Immagine {
 
 #[cfg(test)]
 mod tests {
-    #[::core::prelude::v1::test]
-    fn share_names_follow_the_bytes_sent() {
-        let jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        let mut heic = vec![0, 0, 0, 24];
-        heic.extend_from_slice(b"ftypheic0000");
-        assert_eq!(super::share_name(Some("IMG_1.HEIC"), &jpeg, false), ("IMG_1.jpg".to_string(), "image/jpeg"));
-        assert_eq!(super::share_name(Some("a/b.jpg"), &heic, false), ("b.heic".to_string(), "image/heic"));
-        assert_eq!(super::share_name(Some("clip.MOV"), b"\0\0\0\x18ftypisom0000", true), ("clip.mp4".to_string(), "video/mp4"));
-        assert_eq!(super::share_name(None, b"", true), ("video.mp4".to_string(), "video/mp4"));
-    }
-
     use super::*;
     use ::gpui::TestAppContext;
     use std::cell::Cell;
@@ -1780,41 +1722,5 @@ mod tests {
             assert!(!v.menu.is_open(), "the tap closed the menu");
             assert!(!v.chrome_hidden, "and did not reach the photo");
         });
-    }
-}
-
-/// Largest video that is loaded into memory to be shared (web memory is 1 GiB and the bytes are copied on the way).
-const SHARE_MAX_BYTES: u64 = 200_000_000;
-
-/// File name and MIME type for sharing `bytes`: the asset's own name where known, with the extension of what is
-/// really sent (an edited/preview JPEG of a `.HEIC` is `.jpg`, a transcoded video `.mp4`).
-fn share_name(original: Option<&str>, bytes: &[u8], video: bool) -> (String, &'static str) {
-    let (ext, mime) = sniff(bytes).unwrap_or(if video { ("mp4", "video/mp4") } else { ("jpg", "image/jpeg") });
-    let stem = original
-        .map(|n| n.rsplit(['/', '\\']).next().unwrap_or(n))
-        .map(|n| n.rsplit_once('.').map_or(n, |(stem, _)| stem))
-        .filter(|s| !s.is_empty())
-        .unwrap_or(if video { "video" } else { "foto" });
-    (format!("{stem}.{ext}"), mime)
-}
-
-fn sniff(b: &[u8]) -> Option<(&'static str, &'static str)> {
-    if b.starts_with(&[0xFF, 0xD8]) {
-        Some(("jpg", "image/jpeg"))
-    } else if b.starts_with(&[0x89, b'P', b'N', b'G']) {
-        Some(("png", "image/png"))
-    } else if b.starts_with(b"GIF8") {
-        Some(("gif", "image/gif"))
-    } else if b.len() > 12 && &b[..4] == b"RIFF" && &b[8..12] == b"WEBP" {
-        Some(("webp", "image/webp"))
-    } else if b.len() > 12 && &b[4..8] == b"ftyp" {
-        Some(match &b[8..12] {
-            b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"mif1" | b"msf1" => ("heic", "image/heic"),
-            b"avif" => ("avif", "image/avif"),
-            b"qt  " => ("mov", "video/quicktime"),
-            _ => ("mp4", "video/mp4"),
-        })
-    } else {
-        None
     }
 }

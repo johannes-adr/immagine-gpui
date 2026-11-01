@@ -104,6 +104,13 @@ pub fn content_range_total(value: &str) -> Option<u64> {
     value.rsplit('/').next()?.trim().parse().ok()
 }
 
+/// A file for the share sheet.
+pub struct ShareFile {
+    pub name: String,
+    pub mime: &'static str,
+    pub bytes: Vec<u8>,
+}
+
 pub struct VideoConfig {
     pub codec: String,
     pub description: Vec<u8>,
@@ -229,10 +236,9 @@ pub trait Host: 'static {
     /// The audio output. Must be called from a user gesture (the browser only unlocks sound then). `None` if the
     /// platform has none.
     fn audio_output() -> Option<Self::AudioOut>;
-    /// Hands a file to the system share sheet. `Err` when the platform has none (desktop Linux/Windows) or the user
-    /// cancels; a cancel is an `Err` containing "AbortError", which callers show no message for. Web: Web Share API.
-    /// iOS: `UIActivityViewController`, macOS: `NSSharingServicePicker` (see `host/desktop/share.rs`).
-    async fn share_file(name: &str, mime: &str, bytes: Vec<u8>) -> Result<(), String>;
+    /// Hands files to the system share sheet (iOS `UIActivityViewController`, macOS `NSSharingServicePicker`, web
+    /// `navigator.share`). `Err` when the platform has none; a cancel is an `Err` containing "AbortError".
+    async fn share_files(files: Vec<ShareFile>) -> Result<(), String>;
     /// Reports pinch and raw single-touch events. `None` if the platform has no such input source.
     fn install_gestures(on_event: impl Fn(Pinch) + 'static) -> Option<Self::Gestures>;
 }

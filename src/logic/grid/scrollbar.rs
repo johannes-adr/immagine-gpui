@@ -64,7 +64,7 @@ pub fn item_at(g: &HitGeom, offset: f32, y: f32) -> Option<usize> {
     }
     let row = (g.content_y(y, offset) / g.row_h()).floor();
     let row = (row - g.top_rows as f32).max(0.) as usize;
-    Some((row * g.columns).min(g.count - 1))
+    Some(g.first_of_row(row).min(g.count - 1))
 }
 
 const MONTHS: [&str; 12] = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
@@ -154,12 +154,12 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn photo_at_a_screen_position() {
-        // 3 columns, 100 + 2 pt rows, 2 empty rows above, list top at -150 (shift), 10 photos (4 rows).
+        // 3 columns, 100 + 2 pt rows, 2 empty rows above, list top at -150 (shift), 10 photos (rows of 1, 3, 3, 3).
         let g = HitGeom { width: 300., count: 10, columns: 3, cell: 100., gap: 2., top_rows: 2, top: -104. };
         // Scrolled to the start: screen y 100 is content 204 = row 2 = photo row 0.
         assert_eq!(item_at(&g, 0., 100.), Some(0));
         // 102 pt further down: next photo row.
-        assert_eq!(item_at(&g, -102., 100.), Some(3));
+        assert_eq!(item_at(&g, -102., 100.), Some(1));
         // Far past the end and above the start clamp.
         assert_eq!(item_at(&g, -9999., 100.), Some(9));
         assert_eq!(item_at(&g, 500., 100.), Some(0));

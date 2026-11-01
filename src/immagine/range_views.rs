@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 const SIDE: f32 = 16.;
 const GAP: f32 = 10.;
-const RADIUS: f32 = 16.;
+const RADIUS: f32 = super::TILE_RADIUS;
 const MONTHS: [&str; 12] = ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni", "Juli", "Aug.", "Sept.", "Okt.", "Nov.", "Dez."];
 
 /// One rounded photo card with `label` at its top left.
@@ -45,8 +45,9 @@ fn card(
     };
     #[cfg(test)]
     let base = base.debug_selector(|| format!("card-{}", item.id));
-    base.children(picture.map(|image| img(image).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Cover)))
-        .child(div().absolute().top_0().left_0().w_full().h(px(label_size * 3.)).bg(linear_gradient(
+    // `overflow_hidden` clips to a rectangle only: the picture and the gradient need the corners themselves.
+    base.children(picture.map(|image| img(image).absolute().top_0().left_0().size_full().rounded(px(RADIUS)).object_fit(ObjectFit::Cover)))
+        .child(div().absolute().top_0().left_0().w_full().h(px(label_size * 3.)).rounded_t(px(RADIUS)).bg(linear_gradient(
             180.,
             linear_color_stop(rgba(0x00000066), 0.),
             linear_color_stop(rgba(0x00000000), 1.),

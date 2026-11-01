@@ -1,4 +1,4 @@
-//! `Host::share_file` for the native Apple platforms.
+//! `Host::share_files` for the native Apple platforms.
 //!
 //! * iOS: the bytes go to `<tmp>/immagine-share-<n>/<name>` (so the receiver sees the real file name) and a
 //!   `UIActivityViewController` is presented from the topmost view controller of the foreground window scene. On iPad
@@ -13,13 +13,15 @@
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple {
+    use crate::host::ShareFile;
     use futures_channel::oneshot;
     use std::path::PathBuf;
 
     pub const CANCELLED: &str = "AbortError: Teilen abgebrochen";
 
-    /// Writes `bytes` to a fresh folder below the temp dir and removes the folders of earlier shares.
-    fn temp_file(name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+    /// Writes the files to a fresh folder below the temp dir and removes the folders of earlier shares. Returns the
+    /// folder and the file paths.
+    fn temp_files(files: &[ShareFile]) -> Result<(PathBuf, Vec<PathBuf>), String> {
         let root = std::env::temp_dir();
         if let Ok(entries) = std::fs::read_dir(&root) {
             for e in entries.flatten() {
@@ -31,21 +33,19 @@ mod apple {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
         let dir = root.join(format!("immagine-share-{nanos}"));
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let name: String = name.chars().map(|c| if c == '/' || c == '\\' || c == ':' { '_' } else { c }).collect();
-        let name = if name.is_empty() || name.starts_with('.') { format!("datei{name}") } else { name };
-        let path = dir.join(name);
-        std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-        Ok(path)
-    }
-
-    fn remove(path: &std::path::Path) {
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::remove_dir_all(dir);
+        let mut paths = Vec::with_capacity(files.len());
+        for f in files {
+            let name: String = f.name.chars().map(|c| if c == '/' || c == '\\' || c == ':' { '_' } else { c }).collect();
+            let name = if name.is_empty() || name.starts_with('.') { format!("datei{name}") } else { name };
+            let path = dir.join(name);
+            std::fs::write(&path, &f.bytes).map_err(|e| e.to_string())?;
+            paths.push(path);
         }
+        Ok((dir, paths))
     }
 
     #[cfg(target_os = "ios")]
-    pub async fn share(name: &str, _mime: &str, bytes: Vec<u8>) -> Result<(), String> {
+    pub async fn share(files: Vec<ShareFile>) -> Result<(), String> {
         use block2::RcBlock;
         use objc2::rc::Retained;
         use objc2::runtime::AnyObject;
@@ -56,13 +56,15 @@ mod apple {
         use std::cell::RefCell;
 
         let mtm = MainThreadMarker::new().ok_or("Teilen: nicht im Hauptthread")?;
-        let path = temp_file(name, &bytes)?;
-        drop(bytes);
+        let (dir, paths) = temp_files(&files)?;
+        drop(files);
         let (tx, rx) = oneshot::channel::<bool>();
         let started: Result<(), String> = (|| {
-            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
-            let item: Retained<AnyObject> = unsafe { Retained::cast_unchecked(url) };
-            let items: Retained<NSArray<AnyObject>> = NSArray::from_retained_slice(&[item]);
+            let urls: Vec<Retained<AnyObject>> = paths
+                .iter()
+                .map(|path| unsafe { Retained::cast_unchecked(NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()))) })
+                .collect();
+            let items: Retained<NSArray<AnyObject>> = NSArray::from_retained_slice(&urls);
             let avc = unsafe { UIActivityViewController::initWithActivityItems_applicationActivities(mtm.alloc(), &items, None) };
 
             // Topmost view controller of the foreground active window scene.
@@ -109,16 +111,16 @@ mod apple {
             Ok(())
         })();
         if let Err(e) = started {
-            remove(&path);
+            let _ = std::fs::remove_dir_all(&dir);
             return Err(e);
         }
         let completed = rx.await.unwrap_or(false);
-        remove(&path);
+        let _ = std::fs::remove_dir_all(&dir);
         if completed { Ok(()) } else { Err(CANCELLED.into()) }
     }
 
     #[cfg(target_os = "macos")]
-    pub async fn share(name: &str, _mime: &str, bytes: Vec<u8>) -> Result<(), String> {
+    pub async fn share(files: Vec<ShareFile>) -> Result<(), String> {
         use objc2::rc::Retained;
         use objc2::runtime::{AnyObject, ProtocolObject};
         use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
@@ -150,13 +152,15 @@ mod apple {
         );
 
         let mtm = MainThreadMarker::new().ok_or("Teilen: nicht im Hauptthread")?;
-        let path = temp_file(name, &bytes)?;
-        drop(bytes);
+        let (dir, paths) = temp_files(&files)?;
+        drop(files);
         let (tx, rx) = oneshot::channel::<bool>();
         let keep = (|| {
-            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
-            let item: Retained<AnyObject> = unsafe { Retained::cast_unchecked(url) };
-            let items: Retained<NSArray<AnyObject>> = NSArray::from_retained_slice(&[item]);
+            let urls: Vec<Retained<AnyObject>> = paths
+                .iter()
+                .map(|path| unsafe { Retained::cast_unchecked(NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()))) })
+                .collect();
+            let items: Retained<NSArray<AnyObject>> = NSArray::from_retained_slice(&urls);
             let picker = unsafe { NSSharingServicePicker::initWithItems(mtm.alloc(), &items) };
             let delegate: Retained<ShareDelegate> = {
                 let this = mtm.alloc::<ShareDelegate>().set_ivars(Ivars { tx: RefCell::new(Some(tx)) });
@@ -175,7 +179,7 @@ mod apple {
         let keep = match keep {
             Ok(k) => k,
             Err(e) => {
-                remove(&path);
+                let _ = std::fs::remove_dir_all(&dir);
                 return Err(e);
             }
         };
@@ -184,7 +188,7 @@ mod apple {
         if chosen {
             Ok(())
         } else {
-            remove(&path);
+            let _ = std::fs::remove_dir_all(&dir);
             Err(CANCELLED.into())
         }
     }
@@ -194,6 +198,6 @@ mod apple {
 pub use apple::share;
 
 #[cfg(not(any(target_os = "ios", target_os = "macos")))]
-pub async fn share(_name: &str, _mime: &str, _bytes: Vec<u8>) -> Result<(), String> {
+pub async fn share(_files: Vec<crate::host::ShareFile>) -> Result<(), String> {
     Err("Teilen wird auf dieser Plattform nicht unterstützt".into())
 }

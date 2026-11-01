@@ -420,13 +420,14 @@ impl Immagine {
                 let picture = covers.get(k).cloned().flatten();
                 div()
                     .size(px(half))
+                    .rounded(px(super::TILE_RADIUS))
                     .bg(p.chip)
-                    .children(picture.map(|image| img(image).size_full().object_fit(ObjectFit::Cover)))
+                    .children(picture.map(|image| img(image).size_full().rounded(px(super::TILE_RADIUS)).object_fit(ObjectFit::Cover)))
                     .into_any_element()
             });
             let cell = div()
                 .size(px(tile))
-                .rounded(px(16.))
+                .rounded(px(super::TILE_RADIUS))
                 .overflow_hidden()
                 .bg(p.chip)
                 .flex()
@@ -452,10 +453,10 @@ impl Immagine {
             let count = st.counts.get(&album.id).copied().unwrap_or(album.asset_count.max(0) as usize);
             let cell = div()
                 .size(px(tile))
-                .rounded(px(16.))
+                .rounded(px(super::TILE_RADIUS))
                 .overflow_hidden()
                 .bg(p.chip)
-                .children(picture.map(|image| img(image).size_full().object_fit(ObjectFit::Cover)));
+                .children(picture.map(|image| img(image).size_full().rounded(px(super::TILE_RADIUS)).object_fit(ObjectFit::Cover)));
             let id = album.id.clone();
             tiles.push(
                 div()
@@ -493,14 +494,14 @@ impl Immagine {
                 let picture = self.cover_image(cover, &mut tally, cx);
                 let cell = div()
                     .size(px(tile))
-                    .rounded(px(16.))
+                    .rounded(px(super::TILE_RADIUS))
                     .overflow_hidden()
                     .bg(p.chip)
                     .flex()
                     .items_center()
                     .justify_center()
                     .children(special.glyph().filter(|_| picture.is_none()).map(|g| crate::components::icon::glyph(g, 40., p.secondary)))
-                    .children(picture.map(|image| img(image).size_full().object_fit(ObjectFit::Cover)));
+                    .children(picture.map(|image| img(image).size_full().rounded(px(super::TILE_RADIUS)).object_fit(ObjectFit::Cover)));
                 let (one, many) = if special == Special::Videos { ("Video", "Videos") } else { ("Foto", "Fotos") };
                 extras.push(
                     div()

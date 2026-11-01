@@ -13,6 +13,7 @@ mod range_views;
 mod slider;
 mod search;
 mod selection;
+mod share;
 mod scrollbar;
 mod jobs;
 mod settings;
@@ -146,11 +147,15 @@ pub(crate) struct Immagine {
     jobs: jobs::JobsState,
     picker: album_picker::PickerState,
     downloads: downloads::Downloads,
+    share: share::ShareState,
     select: selection::SelectState,
     scrollbar: scrollbar::ScrollbarState,
 }
 
 /// The timeline is stored newest first; the grid reads oldest first, so the newest photos sit at the bottom.
+/// Corner radius of photo tiles with a caption or label (albums, years, months), lightly rounded like Apple Photos.
+const TILE_RADIUS: f32 = 10.;
+
 fn oldest_first(mut items: Vec<TimelineItem>) -> Vec<TimelineItem> {
     items.reverse();
     items
@@ -282,6 +287,7 @@ impl Immagine {
             jobs: Default::default(),
             picker: Default::default(),
             downloads,
+            share: Default::default(),
             select: Default::default(),
             scrollbar: Default::default(),
         };

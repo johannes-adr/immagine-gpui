@@ -11,6 +11,7 @@
 //! on (`swallow_click`).
 
 use crate::components::icon::{glyph, Glyph};
+use super::share::ShareFrom;
 use super::{Immagine, Screen};
 use crate::components::button::{self, Surface};
 use crate::components::morph::{self, Morph};
@@ -108,6 +109,7 @@ impl Immagine {
     }
 
     pub(super) fn select_end(&mut self) {
+        self.share_selection_ended();
         self.select = SelectState { geom: self.select.geom.clone(), edges: self.select.edges.clone(), ids: Rc::new(RefCell::new(HashSet::new())), ..Default::default() };
     }
 
@@ -130,6 +132,7 @@ impl Immagine {
         if std::mem::take(&mut self.select.swallow_click) {
             return;
         }
+        self.share.notice = None;
         self.select_toggle(id, cx);
     }
 
@@ -362,6 +365,15 @@ impl Immagine {
         cx.notify();
     }
 
+    fn sel_share(&mut self, cx: &mut Context<Self>) {
+        let items: Vec<_> = {
+            let selected = self.select.ids.borrow();
+            // Timeline order (newest first), not the hash set's.
+            self.items.iter().rev().filter(|i| selected.contains(&i.id)).cloned().collect()
+        };
+        self.share_assets(items, ShareFrom::Selection, cx);
+    }
+
     fn sel_delete(&mut self, cx: &mut Context<Self>) {
         let ids: Vec<String> = self.select.ids.borrow().iter().cloned().collect();
         self.select.delete.reset();
@@ -410,6 +422,11 @@ impl Immagine {
             self.select.ids.borrow().iter().filter(|id| !stored.contains(*id)).count()
         };
         let mut download = round("sel-download", Glyph::Download, if missing > 0 { p.label } else { icon_color });
+        // Shows how far the files are while they load; a tap on it cancels.
+        let mut share = button::circle("sel-share", Surface::new(p.bar_tint), TRASH).child(match self.share_fraction(&ShareFrom::Selection) {
+            Some(fraction) => crate::components::icon::progress_ring(fraction, 24., p.label),
+            None => glyph(Glyph::Share, 24., icon_color),
+        });
         if missing > 0 {
             download = download.active(button::dim).on_click(cx.listener(|this, _, _, cx| this.sel_download(cx)));
         }
@@ -418,6 +435,7 @@ impl Immagine {
                 let ids: Vec<String> = this.select.ids.borrow().iter().cloned().collect();
                 this.open_album_picker(ids, true, cx);
             }));
+            share = share.active(button::dim).on_click(cx.listener(|this, _, _, cx| this.sel_share(cx)));
             trash = trash.active(button::dim).on_click(cx.listener(|this, _, _, cx| this.open_sel_delete(cx)));
         }
         div()
@@ -438,18 +456,9 @@ impl Immagine {
                     .flex_row()
                     .items_center()
                     .justify_between()
-                    .child(div().flex().flex_row().gap_2().child(add).child(download))
-                    .child(
-                        button::pill("sel-count", Surface::new(p.bar_tint), 52.)
-                            .px(px(14.))
-                            .mx_2()
-                            .min_w_0()
-                            .justify_start()
-                            .text_size(px(14.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(p.label)
-                            .child(title(count)),
-                    )
+                    .child(add)
+                    .child(download)
+                    .child(share)
                     // While the confirmation morphs out of the trash button, the button itself is gone.
                     .child(if self.select.delete.active() { div().size(px(TRASH)).flex_none().into_any_element() } else { trash.into_any_element() }),
             )
@@ -535,11 +544,11 @@ mod tests {
         ids
     }
 
-    /// 3 columns of 100 px with a 2 px gap, 4 rows (10 photos), no empty rows above, list at y = 0.
+    /// 3 columns of 100 px with a 2 px gap, 4 full rows (12 photos), no empty rows above, list at y = 0.
     fn open(cx: &mut Context<Immagine>, app: &mut Immagine) {
         app.screen = Screen::Timeline;
-        app.items = Rc::new(items(10));
-        app.select.geom.set(HitGeom { width: 304., count: 10, columns: 3, cell: 100., gap: 2., top_rows: 0, top: 0. });
+        app.items = Rc::new(items(12));
+        app.select.geom.set(HitGeom { width: 304., count: 12, columns: 3, cell: 100., gap: 2., top_rows: 0, top: 0. });
         app.select.edges.set((20., 700.));
         app.select_begin(cx);
     }
