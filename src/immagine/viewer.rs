@@ -598,19 +598,35 @@ impl Immagine {
     fn share_current(&mut self, cx: &mut Context<Self>) {
         let (origin, token) = (self.origin.clone(), self.token.clone());
         let Some(item) = self.viewer.as_ref().filter(|v| !v.closing).and_then(|v| v.items.get(v.index)) else { return };
-        if item.is_video() {
+        let id = item.id.clone();
+        let video = item.is_video();
+        // A stored download (original, or the H.264 file of a video) is shared from disk, no request.
+        let stored = self.downloads.ids.borrow().contains(&id);
+        if video && !stored {
             self.status = "Videos lassen sich hier noch nicht teilen.".into();
             cx.notify();
             return;
         }
-        let id = item.id.clone();
         self.status = "Bereite zum Teilen vor …".into();
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = async {
-                let client = ImmichClient::new(&origin, H::transport()).map_err(|e| e.to_string())?;
-                let bytes = client.original(&id, &token).await.map_err(|e| e.to_string())?;
-                let (name, mime) = if bytes.starts_with(&[0x89, b'P']) { ("foto.png", "image/png") } else { ("foto.jpg", "image/jpeg") };
+                let local = if stored { H::blob_get(super::downloads::DOWNLOAD_DB, &id).await.ok().flatten().filter(|b| !b.is_empty()) } else { None };
+                let bytes = match local {
+                    Some(b) => b,
+                    None if video => return Err("Das Video ist nicht mehr gespeichert.".to_string()),
+                    None => {
+                        let client = ImmichClient::new(&origin, H::transport()).map_err(|e| e.to_string())?;
+                        client.original(&id, &token).await.map_err(|e| e.to_string())?
+                    }
+                };
+                let (name, mime) = if video {
+                    ("video.mp4", "video/mp4")
+                } else if bytes.starts_with(&[0x89, b'P']) {
+                    ("foto.png", "image/png")
+                } else {
+                    ("foto.jpg", "image/jpeg")
+                };
                 H::share_file(name, mime, bytes).await
             }
             .await;

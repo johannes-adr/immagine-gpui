@@ -3,6 +3,7 @@
 //! * HTTP: `ureq` on a worker thread per request, one shared agent so the Immich cookie persists.
 //! * Persistence: plain files below [`data_dir`].
 //! * Images: downloaded and decoded with the `image` crate on a worker thread.
+//! * Sharing: `UIActivityViewController` (iOS) / `NSSharingServicePicker` (macOS), see `share`; `Err` elsewhere.
 //! * No video decoder and no audio output: `video_decoder` and `audio_output` return `None`. `install_gestures` reports
 //!   pinch and raw touches from GPUI's touch observer (iOS only, see `gestures`); mouse and trackpad arrive through GPUI itself.
 
@@ -10,6 +11,7 @@ mod blocking;
 mod gestures;
 pub mod entry;
 mod http;
+mod share;
 mod store;
 
 use crate::host::{AppInfo, Cancel, AudioConfig, AudioOutput, Chunk, Decoded, Host, Pinch, VideoConfig, VideoDecode};
@@ -168,8 +170,8 @@ impl Host for Desktop {
         Ok(bytes)
     }
 
-    async fn share_file(_name: &str, _mime: &str, _bytes: Vec<u8>) -> Result<(), String> {
-        Err("Teilen wird auf dem Desktop nicht unterstützt".into())
+    async fn share_file(name: &str, mime: &str, bytes: Vec<u8>) -> Result<(), String> {
+        share::share(name, mime, bytes).await
     }
 
     async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
