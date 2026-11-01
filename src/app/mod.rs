@@ -1,3 +1,4 @@
+pub(crate) mod photo;
 mod photos;
 mod reminders;
 mod tab_bar;

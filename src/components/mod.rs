@@ -6,7 +6,6 @@ pub(crate) mod glass;
 pub(crate) mod icon;
 pub(crate) mod list;
 pub(crate) mod morph;
-pub(crate) mod photo;
 pub(crate) mod rubber_band;
 pub(crate) mod scrim;
 pub(crate) mod sheet;
