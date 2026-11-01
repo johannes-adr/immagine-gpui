@@ -33,15 +33,18 @@ struct Cover {
 pub(super) enum Special {
     Videos,
     Trash,
+    /// Hidden entry: its tile is an empty, tappable slot.
+    Archive,
 }
 
 impl Special {
-    const ALL: [Special; 2] = [Special::Videos, Special::Trash];
+    const ALL: [Special; 3] = [Special::Videos, Special::Trash, Special::Archive];
 
     fn title(self) -> &'static str {
         match self {
             Special::Videos => "Videos",
             Special::Trash => "Papierkorb",
+            Special::Archive => "Archiviert",
         }
     }
 
@@ -49,14 +52,17 @@ impl Special {
         match self {
             Special::Videos => "Keine Videos",
             Special::Trash => "Papierkorb ist leer",
+            Special::Archive => "Archiv ist leer",
         }
     }
 
-    fn glyph(self) -> super::icons::Glyph {
+    /// Glyph for an empty tile; the hidden Archiviert slot shows none.
+    fn glyph(self) -> Option<super::icons::Glyph> {
         use super::icons::Glyph;
         match self {
-            Special::Videos => Glyph::Play,
-            Special::Trash => Glyph::Trash,
+            Special::Videos => Some(Glyph::Play),
+            Special::Trash => Some(Glyph::Trash),
+            Special::Archive => None,
         }
     }
 
@@ -66,6 +72,7 @@ impl Special {
         match self {
             Special::Videos => store.video_items(),
             Special::Trash => store.trashed_items(),
+            Special::Archive => store.archived_items(),
         }
     }
 }
@@ -175,6 +182,12 @@ fn caption(p: &Palette, name: &str, detail: String) -> Div {
         .px_1()
         .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).truncate().child(name.to_string()))
         .child(div().text_size(px(13.)).text_color(p.secondary).child(detail))
+}
+
+/// The Archiviert entry: an empty tile-sized slot (nothing painted, no pressed state), tappable through the
+/// caller's `on_click`.
+fn hidden_slot(i: usize, tile: f32) -> Stateful<Div> {
+    div().id(("album-special", i)).w(px(tile)).h(px(tile))
 }
 
 /// Glass chip used for the back buttons.
@@ -475,10 +488,23 @@ impl Immagine {
             );
         }
 
-        // Videos and Papierkorb below the albums, set apart by a rule.
+        // Videos, Papierkorb and the hidden Archiviert slot below the albums, set apart by a rule.
         let mut extras: Vec<AnyElement> = Vec::new();
         if st.path.is_empty() {
             for (i, special) in Special::ALL.iter().copied().enumerate() {
+                if special == Special::Archive {
+                    // Invisible but real: an empty slot with a click handler and no feedback, no cover requested.
+                    extras.push(
+                        hidden_slot(i, tile)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if !window.tap_caught_fling() {
+                                    this.open_special(special, cx)
+                                }
+                            }))
+                            .into_any_element(),
+                    );
+                    continue;
+                }
                 let (count, cover) = st.specials.get(i).map(|(n, c)| (*n, c.as_ref())).unwrap_or((0, None));
                 let picture = self.cover_image(cover, &mut tally, cx);
                 let cell = div()
@@ -489,7 +515,7 @@ impl Immagine {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .children(picture.is_none().then(|| super::icons::glyph(special.glyph(), 40., p.secondary)))
+                    .children(special.glyph().filter(|_| picture.is_none()).map(|g| super::icons::glyph(g, 40., p.secondary)))
                     .children(picture.map(|image| img(image).size_full().object_fit(ObjectFit::Cover)));
                 let (one, many) = if special == Special::Videos { ("Video", "Videos") } else { ("Foto", "Fotos") };
                 extras.push(
@@ -599,5 +625,37 @@ impl Immagine {
                     .child(div().h(px(self.bottom.max(10.) + 84.))),
             ))
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ::gpui::TestAppContext;
+    use std::cell::Cell;
+
+    struct Probe(Rc<Cell<u32>>);
+
+    impl Render for Probe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let taps = self.0.clone();
+            div().size_full().child(hidden_slot(2, 120.).on_click(move |_, _, _| taps.set(taps.get() + 1)))
+        }
+    }
+
+    /// The invisible tile has no children and paints nothing, yet a click on its area arrives. (A test of
+    /// `album_browser` itself needs a synced engine; this covers the element that carries the handler.)
+    #[::core::prelude::v1::test]
+    fn hidden_slot_is_tappable() {
+        let mut cx = TestAppContext::single();
+        let taps = Rc::new(Cell::new(0));
+        let (_, cx) = cx.add_window_view({
+            let taps = taps.clone();
+            move |_, _| Probe(taps)
+        });
+        cx.simulate_click(point(px(60.), px(60.)), Modifiers::none());
+        assert_eq!(taps.get(), 1);
+        cx.simulate_click(point(px(300.), px(300.)), Modifiers::none());
+        assert_eq!(taps.get(), 1, "outside the slot nothing happens");
     }
 }
