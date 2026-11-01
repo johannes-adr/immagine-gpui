@@ -45,12 +45,18 @@ impl Immagine {
         }
         match event {
             Pinch::Begin => {
+                self.sb_cancel_touch(cx);
                 self.sel_cancel_touch(cx);
                 self.grid_begin()
             }
             Pinch::Move { ratio, .. } => self.grid_apply(ratio, cx),
             Pinch::End => self.grid_release(cx),
-            Pinch::Down { .. } | Pinch::Drag { .. } | Pinch::Up { .. } => self.sel_touch(event, cx),
+            Pinch::Down { .. } | Pinch::Drag { .. } | Pinch::Up { .. } => {
+                // The scrollbar thumb takes its presses before selection painting sees them.
+                if !self.sb_touch(event, cx) {
+                    self.sel_touch(event, cx)
+                }
+            }
         }
     }
 
@@ -391,6 +397,9 @@ impl Immagine {
                                     return;
                                 }
                                 view.update(cx, |this, cx| {
+                                    if this.sb_swallow_click() {
+                                        return;
+                                    }
                                     if selecting {
                                         this.select_tap(&tap_id, cx)
                                     } else {

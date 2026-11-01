@@ -149,7 +149,12 @@ impl Immagine {
     }
 
     fn sel_can_start(&self) -> bool {
-        self.select.on && self.grid_active() && !self.grid_zooming() && !self.select.overlay_open()
+        self.select.on && self.grid_active() && !self.grid_zooming() && !self.select.overlay_open() && !self.scrollbar.dragging()
+    }
+
+    /// A press on the scrollbar thumb takes over: forget a press that began on a tile.
+    pub(super) fn sel_forget_press(&mut self) {
+        self.select.press = None;
     }
 
     // MARK: - Painting
