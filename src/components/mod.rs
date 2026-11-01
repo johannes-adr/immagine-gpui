@@ -1,6 +1,6 @@
-//! Reusable GPUI building blocks. Nothing in here knows the app: no Immich, no German strings, no `crate::immagine`,
-//! `crate::logic`, `crate::host`, `crate::theme` or `crate::util`. Text, colors and ids come in as parameters;
-//! the one outside input is the time (see `clock`), which the host installs once.
+//! Reusable GPUI building blocks. Nothing in here knows the app: no Immich, no German strings, and no import from
+//! the app's own modules (immagine, logic, host, theme, util, app; checked by a grep, see AGENTS.md). Text, colors
+//! and ids come in as parameters; the one outside input is the time (see `clock`), which the host installs once.
 //!
 //! **Using it in another project:** copy this folder, add it as `mod components;` (module paths are all
 //! `crate::components::...`), depend on `gpui_kit` (GPUI) and call `clock::install(my_now_ms)` once at startup.
