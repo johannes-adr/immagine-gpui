@@ -50,6 +50,8 @@ pub(super) enum Glyph {
     Pause,
     AddToAlbum,
     Check,
+    /// Counter-clockwise arrow ("Wiederherstellen").
+    Restore,
     /// The jobs list: arrow into a tray beside list lines.
     Jobs,
     /// Three dots in a row ("..." menu).
@@ -172,6 +174,10 @@ pub(super) fn glyph(kind: Glyph, size: f32, color: Rgba) -> Canvas<()> {
                     stroke(&[(3., 4.5), (21., 4.5), (21., 9.), (3., 9.), (3., 4.5)], window);
                     stroke(&[(4.5, 9.), (4.5, 20.), (19.5, 20.), (19.5, 9.)], window);
                     stroke(&[(9.5, 13.5), (14.5, 13.5)], window);
+                }
+                Glyph::Restore => {
+                    stroke(&[(5., 12.), (5.6, 8.6), (7.8, 6.), (11., 4.8), (14.4, 5.4), (17.2, 7.6), (18.6, 10.8), (18.4, 14.2), (16.6, 17.), (13.6, 18.8), (10.4, 18.9)], window);
+                    stroke(&[(5., 4.5), (5., 9.5), (10., 9.5)], window);
                 }
                 Glyph::Check => stroke(&[(5., 12.5), (10., 17.5), (19., 7.)], window),
                 Glyph::Trash => {

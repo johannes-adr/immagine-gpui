@@ -173,6 +173,13 @@ impl<T: HttpTransport> ImmichClient<T> {
         self.fetch_json(request(Method::Post, "/api/search/metadata", Some(token), Some(body))).await
     }
 
+    /// `POST /api/search/metadata` for the trash: `withDeleted` plus `trashedAfter` (epoch) keeps only assets that
+    /// have a `deletedAt`. The flat fields are deprecated since Immich 3.2 but still accepted.
+    pub async fn trashed_assets(&self, page: u32, size: u32, token: &str) -> Result<SearchMetadataResponse, ClientError> {
+        let body = json_body(&TrashSearchBody { page, size, with_deleted: true, trashed_after: "1970-01-01T00:00:00.000Z" })?;
+        self.fetch_json(request(Method::Post, "/api/search/metadata", Some(token), Some(body))).await
+    }
+
     pub async fn asset(&self, id: &str, token: &str) -> Result<Asset, ClientError> {
         self.fetch_json(request(Method::Get, format!("/api/assets/{}", encode(id)), Some(token), None)).await
     }
@@ -547,6 +554,15 @@ struct SearchBody {
     size: u32,
     with_deleted: bool,
     with_archived: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrashSearchBody {
+    page: u32,
+    size: u32,
+    with_deleted: bool,
+    trashed_after: &'static str,
 }
 
 #[derive(Serialize)]
