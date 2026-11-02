@@ -141,6 +141,8 @@ pub(super) struct Viewer {
     details: Option<Rc<Asset>>,
     /// The native player while a video plays (see `video_player`).
     video: Option<Rc<RefCell<Player>>>,
+    /// `video` is the motion part of a Live Photo (no controls, ends by itself).
+    live_play: bool,
     /// Left, top, width and height (px) of the scrubber's track, measured by the last render, and the fraction under the finger.
     scrub_track: Rc<Cell<(f32, f32, f32, f32)>>,
     scrub_frac: f32,
@@ -204,6 +206,7 @@ impl Viewer {
         self.dy = 0.;
         self.ds = 1.;
         self.video = None;
+        self.live_play = false;
         self.details = None;
         self.menu.reset();
         self.info_scroll.set_offset(point(px(0.), px(0.)));
@@ -274,6 +277,7 @@ impl Immagine {
             info: false,
             details: None,
             video: None,
+            live_play: false,
             scrub_track: Rc::new(Cell::new((0., 0., 1., 0.))),
             scrub_frac: 0.,
             trash: Morph::default(),
@@ -629,6 +633,53 @@ impl Immagine {
         cx.notify();
     }
 
+    /// "Als Albumcover": the shown photo becomes the tile of `album_id` (server first, then the store).
+    fn set_cover(&mut self, album_id: &str, cx: &mut Context<Self>) {
+        let Some(asset) = self.viewer_item_id() else { return };
+        let (origin, token, album_id) = (self.origin.clone(), self.token.clone(), album_id.to_string());
+        cx.spawn(async move |this, cx| {
+            let result = match crate::logic::client::ImmichClient::new(&origin, H::transport()) {
+                Ok(client) => client
+                    .update_album(&album_id, &crate::logic::client::AlbumUpdate { album_thumbnail_asset_id: Some(&asset), ..Default::default() }, &token)
+                    .await
+                    .map_err(|e| e.to_string()),
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = this.update(cx, |t, cx| match result {
+                Ok(album) => t.merge_album(album, cx),
+                Err(e) => {
+                    t.status = format!("Albumcover konnte nicht gesetzt werden: {e}");
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// "Endgültig löschen" (the shown photo is in the Papierkorb): the server deletes it for good, then it leaves the
+    /// store and the viewer. Not undoable, so nothing is applied before the server agrees.
+    fn purge_current(&mut self, cx: &mut Context<Self>) {
+        let Some(v) = self.viewer.as_mut().filter(|v| !v.closing) else { return };
+        v.trash.reset();
+        let Some(id) = v.items.get(v.index).map(|i| i.id.clone()) else { return };
+        let (origin, token) = (self.origin.clone(), self.token.clone());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = super::purge::delete_forever(&origin, &token, Some(vec![id.clone()])).await;
+            let _ = this.update(cx, |t, cx| match result {
+                Ok(()) => {
+                    t.purged(std::slice::from_ref(&id), cx);
+                    t.viewer_drop(&id, cx);
+                }
+                Err(e) => {
+                    t.status = format!("Löschen fehlgeschlagen: {e}");
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     // MARK: - "..." menu
 
     fn open_more_menu(&mut self, cx: &mut Context<Self>) {
@@ -638,6 +689,13 @@ impl Immagine {
             v.menu_archived = archived;
             cx.notify();
         }
+    }
+
+    /// "Foto neu laden": the shown photo's thumbnail, preview and full size leave every cache and are fetched again.
+    fn reload_current(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.viewer_item_id() else { return };
+        thumbs::reload(&self.thumbs, &id, cx);
+        cx.notify();
     }
 
     fn close_more_menu(&mut self, cx: &mut Context<Self>) {
@@ -753,7 +811,16 @@ impl Immagine {
             if v.menu_archived { "Aus Archiv holen" } else { "Archivieren" }.to_string(),
         );
         let mut album = row("viewer-menu-album", crate::components::icon::glyph(crate::components::icon::Glyph::AddToAlbum, 24., white), "Zu Album hinzufügen".to_string());
+        // Only for a photo opened from an album page.
+        let cover_album = if self.tab == 1 { self.albums.open_album_id().map(str::to_string) } else { None };
+        let mut cover = cover_album.as_ref().map(|_| row("viewer-menu-cover", crate::components::icon::glyph(crate::components::icon::Glyph::Check, 24., white), "Als Albumcover".to_string()));
         if open {
+            if let (Some(row), Some(album)) = (cover.take(), cover_album.clone()) {
+                cover = Some(row.on_click(cx.listener(move |this, _, _, cx| {
+                    this.close_more_menu(cx);
+                    this.set_cover(&album, cx);
+                })));
+            }
             download = download.on_click(cx.listener(|this, _, _, cx| {
                 this.close_more_menu(cx);
                 this.download_current(cx);
@@ -766,8 +833,16 @@ impl Immagine {
                 }
             }));
         }
-        let (cw, ch) = (MENU_WIDTH, 3. * MENU_ROW + 16.);
-        let content = div().size_full().p(px(8.)).flex().flex_col().child(download).child(archive).child(album).into_any_element();
+        let mut reload = row("viewer-menu-reload", crate::components::icon::glyph(crate::components::icon::Glyph::Restore, 24., white), "Foto neu laden".to_string());
+        if open {
+            reload = reload.on_click(cx.listener(|this, _, _, cx| {
+                this.close_more_menu(cx);
+                this.reload_current(cx);
+            }));
+        }
+        let rows = if cover.is_some() { 5. } else { 4. };
+        let (cw, ch) = (MENU_WIDTH, rows * MENU_ROW + 16.);
+        let content = div().size_full().p(px(8.)).flex().flex_col().child(download).child(archive).child(album).children(cover).child(reload).into_any_element();
         // From the "..." button (44 pt, top right) to the menu box under the same corner.
         let spec = morph::Spec {
             id: "viewer-menu",
@@ -968,10 +1043,29 @@ impl Immagine {
         cx.notify();
     }
 
+    /// The motion part of the shown Live Photo, from the chip. Plays like a video but without controls; it ends by
+    /// itself (`end_live`) and the still comes back.
+    fn play_live(&mut self, cx: &mut Context<Self>) {
+        let origin = self.origin.clone();
+        let Some(v) = self.viewer.as_mut().filter(|v| !v.closing && v.editor.is_none()) else { return };
+        let Some(motion) = v.details.as_ref().and_then(|a| a.live_photo_video_id.clone()) else { return };
+        let url = format!("{origin}/api/assets/{motion}/video/playback");
+        v.video = Some(Rc::new(RefCell::new(Player::open(url, None, cx))));
+        v.live_play = true;
+        cx.notify();
+    }
+
+    fn end_live(&mut self, cx: &mut Context<Self>) {
+        let Some(v) = self.viewer.as_mut().filter(|v| v.live_play) else { return };
+        v.video = None;
+        v.live_play = false;
+        cx.notify();
+    }
+
     /// Whether a press at (`x`, `y`) lands on the visible scrubber (its track plus some slop around it).
     fn scrub_hit(&self, x: f32, y: f32) -> bool {
         let Some(v) = self.viewer.as_ref().filter(|v| !v.closing && v.chrome_vis(now_ms()) > 0.5) else { return false };
-        let ready = v.video.as_ref().is_some_and(|p| p.borrow().status == Status::Ready);
+        let ready = !v.live_play && v.video.as_ref().is_some_and(|p| p.borrow().status == Status::Ready);
         let (left, top, width, height) = v.scrub_track.get();
         ready && x >= left - 12. && x <= left + width + 12. && y >= top - 12. && y <= top + height + 12.
     }
@@ -1227,7 +1321,20 @@ impl Immagine {
                     window.request_animation_frame();
                 }
                 let frame = player.borrow().frame();
-                (frame, Some(self.video_controls(&player, v.scrub_track.clone(), k, self.bottom.max(10.), !closing, cx)))
+                if v.live_play {
+                    // The motion part is over (or could not be played): back to the still.
+                    let over = {
+                        let p = player.borrow();
+                        p.finished() || matches!(p.status, Status::Failed(_))
+                    };
+                    if over {
+                        let me = cx.entity();
+                        cx.defer(move |cx| me.update(cx, |this, cx| this.end_live(cx)));
+                    }
+                    (frame, None)
+                } else {
+                    (frame, Some(self.video_controls(&player, v.scrub_track.clone(), k, self.bottom.max(10.), !closing, cx)))
+                }
             }
             None => (None, None),
         };
@@ -1370,22 +1477,46 @@ impl Immagine {
             let (bw, bh) = DIALOG_SIZE;
             let open = v.trash.is_open();
             let noun = if is_video { "Video" } else { "Foto" };
-            let content = morph::confirm_content(
-                "viewer-dialog-confirm",
-                format!("Dieses {noun} wird aus der Mediathek gelöscht. Du kannst noch 30 Tage in „Zuletzt gelöscht“ darauf zugreifen."),
-                format!("{noun} löschen"),
-                rgb(0xffffff).into(),
-                rgb(0xff5a52).into(),
-                open.then(|| cx.listener(|this, _, _, cx| this.trash_current(cx))),
-            );
-            // From the trash button (48 pt, bottom right) to the confirmation box.
-            let spec = morph::Spec {
-                id: "viewer-dialog",
-                anchor: (vw - 24. - 48., vh - bottom - 48., 48., 48.),
-                card: (vw - 16. - bw, vh - bottom - bh, bw, bh),
-                tint: morph::DIALOG_TINT,
-                anchor_radius: 24.,
-                card_radius: 34.,
+            let in_trash = v.items.get(v.index).is_some_and(|i| i.is_trashed);
+            let content = if in_trash {
+                morph::confirm_content(
+                    "viewer-dialog-purge",
+                    format!("Dieses {noun} wird endgültig gelöscht. Das lässt sich nicht rückgängig machen."),
+                    format!("{noun} endgültig löschen"),
+                    rgb(0xffffff).into(),
+                    rgb(0xff5a52).into(),
+                    open.then(|| cx.listener(|this, _, _, cx| this.purge_current(cx))),
+                )
+            } else {
+                morph::confirm_content(
+                    "viewer-dialog-confirm",
+                    format!("Dieses {noun} wird aus der Mediathek gelöscht. Du kannst noch 30 Tage in „Zuletzt gelöscht“ darauf zugreifen."),
+                    format!("{noun} löschen"),
+                    rgb(0xffffff).into(),
+                    rgb(0xff5a52).into(),
+                    open.then(|| cx.listener(|this, _, _, cx| this.trash_current(cx))),
+                )
+            };
+            // From the trash button (48 pt, bottom right; in the Papierkorb the delete button at the bottom left) to the
+            // confirmation box.
+            let spec = if in_trash {
+                morph::Spec {
+                    id: "viewer-dialog",
+                    anchor: (24., vh - bottom - 48., 48., 48.),
+                    card: (16., vh - bottom - bh, bw, bh),
+                    tint: morph::DIALOG_TINT,
+                    anchor_radius: 24.,
+                    card_radius: 34.,
+                }
+            } else {
+                morph::Spec {
+                    id: "viewer-dialog",
+                    anchor: (vw - 24. - 48., vh - bottom - 48., 48., 48.),
+                    card: (vw - 16. - bw, vh - bottom - bh, bw, bh),
+                    tint: morph::DIALOG_TINT,
+                    anchor_radius: 24.,
+                    card_radius: 34.,
+                }
             };
             morph::overlay(v.trash, spec, now, window, content, |this: &mut Self, cx| this.close_trash_dialog(cx), cx)
         };
@@ -1519,8 +1650,18 @@ impl Immagine {
                             trash.on_click(cx.listener(|this, _, _, cx| this.open_trash_dialog(cx)))
                         };
                     }
-                    // While the confirmation morphs out of the trash button, the button itself is gone.
-                    let trash = if v.trash.active() { div().w(px(48.)).h(px(48.)).into_any_element() } else { trash.into_any_element() };
+                    // In the Papierkorb the left button deletes for good (a trashed photo is not shared); while the
+                    // confirmation morphs out of a button, that button itself is gone.
+                    let blank = || div().w(px(48.)).h(px(48.)).into_any_element();
+                    let (share, trash) = if in_trash {
+                        let mut purge = button("viewer-purge", 48.).child(crate::components::icon::glyph(crate::components::icon::Glyph::Trash, 26., Rgba { a: k, ..rgb(0xff5a52).into() }));
+                        if live {
+                            purge = purge.on_click(cx.listener(|this, _, _, cx| this.open_trash_dialog(cx)));
+                        }
+                        (if v.trash.active() { blank() } else { purge.into_any_element() }, trash.into_any_element())
+                    } else {
+                        (share.into_any_element(), if v.trash.active() { blank() } else { trash.into_any_element() })
+                    };
                     let bar = div()
                         .absolute()
                         .bottom(px(bottom))
@@ -1566,6 +1707,22 @@ impl Immagine {
                             let play = if live { play.on_click(cx.listener(|this, _, _, cx| this.play_video(cx))) } else { play };
                             div().absolute().bottom(px(bottom + 112.)).w_full().flex().justify_center().child(play)
                         }))
+                }))
+                .children((k > 0. && !closing && !is_video && v.editor.is_none() && v.details.as_ref().is_some_and(|a| a.live_photo_video_id.is_some())).then(|| {
+                    div().absolute().left(px(16.)).top(px(top + 54.)).child(
+                        button::chip("viewer-live", surface(k), 30., 12., if v.live_play { "LIVE ■" } else { "LIVE ▶" })
+                            .occlude()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(white)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if this.viewer.as_ref().is_some_and(|v| v.live_play) {
+                                    this.end_live(cx)
+                                } else {
+                                    this.play_live(cx)
+                                }
+                            })),
+                    )
                 }))
                 .children((k > 0.).then(|| {
                     let live = !closing;

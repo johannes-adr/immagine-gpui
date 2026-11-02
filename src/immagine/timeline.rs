@@ -43,6 +43,14 @@ impl Immagine {
     /// continuously; on release the grid settles on a column level (see `grid_release`).
     pub(super) fn grid_pinch(&mut self, event: Pinch, cx: &mut Context<Self>) {
         if !self.grid_active() {
+            // Swipe-select also works on an album page (no pinch zoom there).
+            if self.sel_album_active() {
+                match event {
+                    Pinch::Down { .. } | Pinch::Drag { .. } | Pinch::Up { .. } => self.sel_touch(event, cx),
+                    Pinch::Begin => self.sel_cancel_touch(cx),
+                    _ => {}
+                }
+            }
             return;
         }
         match event {
@@ -264,7 +272,7 @@ impl Immagine {
         let items_empty = items.is_empty();
         let footer = self.bottom.max(10.) + 76.;
         let downloaded = self.downloads.ids.clone();
-        let selecting = timeline && self.select.on;
+        let selecting = (timeline || id == "album-photos") && self.select.on;
         let sel_ids = self.select.ids.clone();
         let count = items.len();
 
@@ -471,6 +479,13 @@ impl Immagine {
                 handle.scroll_to_item(top_rows + rows + bottom_rows - 1, ScrollStrategy::Bottom);
             }
         }
+        if placed.is_none() && selecting {
+            // An album page: same publishing as below, with the list's top where the grid was measured last frame.
+            let vh: f32 = window.viewport_size().height.into();
+            let top = self.grid_bounds.get().origin.y.into();
+            self.select.geom.set(HitGeom { width: vw, count, columns, cell, gap, top_rows, top });
+            self.select.edges.set((top, vh - (self.bottom.max(10.) + 70.)));
+        }
         if placed.is_some() {
             let vh: f32 = window.viewport_size().height.into();
             // Where swipe-to-select finds the tiles (see `selection.rs`).
@@ -488,7 +503,7 @@ impl Immagine {
                 list_scroll_set.set_offset(point(px(0.), px(-y)));
                 self.timeline_jump.take();
             } else if let Some(j) = self.timeline_jump.take() {
-                handle.scroll_to_item(top_rows + (j + skip) / columns, ScrollStrategy::Center);
+                handle.scroll_to_item(top_rows + (j.min(count.saturating_sub(1)) + skip) / columns, ScrollStrategy::Center);
             }
         }
         let list = list.track_scroll(handle);
@@ -508,20 +523,22 @@ impl Immagine {
         // The header is a glass strip laid over the grid, which scrolls underneath it (blurred).
         let head = self.top.max(12.) + 78.;
         let was_placed = self.timeline_placed.get();
-        let list = self.photo_grid("timeline", self.items.clone(), head, (&self.timeline_scroll, Some(&self.timeline_placed)), p, window, cx);
+        let shown = self.shown_items();
+        let list = self.photo_grid("timeline", shown.clone(), head, (&self.timeline_scroll, Some(&self.timeline_placed)), p, window, cx);
         if !was_placed && self.timeline_placed.get() {
             self.scroll_settle.set(crate::util::now_ms());
         }
 
-        let count = self.items.len();
+        let count = shown.len();
         // Scrolled away from the newest photos, the header names the dates on screen instead of the count.
         let (first, last) = self.visible.get();
         self.header_span.set(if self.range_bar { (first, last) } else { (0, 0) });
-        let span = if self.range_bar { self.items.get(first).zip(self.items.get(last)).and_then(|(a, b)| format_range(&a.date_bucket, &b.date_bucket)) } else { None };
+        let span = if self.range_bar { shown.get(first).zip(shown.get(last)).and_then(|(a, b)| format_range(&a.date_bucket, &b.date_bucket)) } else { None };
         let subtitle = match span {
             // In select mode the line under the title tells what is selected; the toolbar only holds the actions.
             _ if self.select.on => self.share.notice.clone().unwrap_or_else(|| super::selection::title(self.select.count())),
             Some(span) => span,
+            None if self.status.is_empty() && self.filter.filter.is_active() => format!("{count} von {} Fotos", self.items.len()),
             None if self.status.is_empty() => format!("{count} Fotos"),
             None => self.status.clone(),
         };
@@ -565,7 +582,15 @@ impl Immagine {
                                     .child(div().text_size(px(34.)).font_weight(FontWeight::BOLD).child("Mediathek"))
                                     .child(div().text_size(px(15.)).text_color(p.secondary).child(subtitle)),
                             )
-                            .children((!self.items.is_empty()).then(|| self.sel_header_button(p, cx)))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .children((!self.items.is_empty() && !self.select.on).then(|| self.filter_button(p, cx)))
+                                    .children((!self.items.is_empty()).then(|| self.sel_header_button(p, cx))),
+                            )
                     ),
             )
     }

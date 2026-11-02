@@ -4,11 +4,14 @@
 //! UI never borrows the store while it is being written. The UI reads a copy of the timeline.
 
 mod album_picker;
+mod album_new;
 mod albums;
 mod downloads;
+mod filter;
 mod hidden_date;
 mod login;
 mod people;
+mod purge;
 mod range_views;
 mod slider;
 mod search;
@@ -146,6 +149,9 @@ pub(crate) struct Immagine {
     settings: settings::SettingsState,
     jobs: jobs::JobsState,
     picker: album_picker::PickerState,
+    new_album: album_new::NewAlbumState,
+    purge: purge::PurgeState,
+    filter: filter::FilterState,
     downloads: downloads::Downloads,
     share: share::ShareState,
     select: selection::SelectState,
@@ -286,6 +292,9 @@ impl Immagine {
             settings: Default::default(),
             jobs: Default::default(),
             picker: Default::default(),
+            new_album: Default::default(),
+            purge: Default::default(),
+            filter: Default::default(),
             downloads,
             share: Default::default(),
             select: Default::default(),
@@ -420,6 +429,9 @@ impl Immagine {
         self.settings.sheet.close();
         self.jobs.reset();
         self.picker.sheet.close();
+        self.new_album = Default::default();
+        self.purge = Default::default();
+        self.filter = Default::default();
         self.tab = 0;
         self.screen = Screen::Login;
         self.downloads.ids.borrow_mut().clear();
@@ -511,7 +523,7 @@ impl TileRect {
 impl Immagine {
     /// The sheet that is shown, topmost first (the album picker covers the viewer, settings and jobs the page).
     pub(super) fn top_sheet(&self) -> Option<&Sheet> {
-        [&self.picker.sheet, &self.settings.sheet, &self.jobs.sheet].into_iter().find(|s| s.visible())
+        [&self.picker.sheet, &self.new_album.sheet, &self.settings.sheet, &self.jobs.sheet].into_iter().find(|s| s.visible())
     }
 
     /// The scroll handle of whatever scrolls on screen now, for the rubber band; `None` while the viewer is open
@@ -555,6 +567,7 @@ impl Render for Immagine {
         self.settings.sheet.tick(window);
         self.jobs.sheet.tick(window);
         self.picker.sheet.tick(window);
+        self.new_album.sheet.tick(window);
         self.grid_default(window.viewport_size().width.into());
         self.grid_tick(window);
         self.select_check();
@@ -592,7 +605,10 @@ impl Render for Immagine {
         let select_overlay = if self.screen == Screen::Timeline && self.select.on { self.sel_overlay(window, cx) } else { None };
         let settings = if self.screen == Screen::Timeline { self.settings_overlay(&p, window, cx) } else { None };
         let jobs = if self.screen == Screen::Timeline { self.jobs_overlay(&p, window, cx) } else { None };
+        let new_album = if self.screen == Screen::Timeline { self.new_album_overlay(&p, window, cx) } else { None };
         let picker = if self.screen == Screen::Timeline { self.picker_overlay(&p, window, cx) } else { None };
+        let purge = if self.screen == Screen::Timeline { self.purge_overlay(window, cx) } else { None };
+        let filter = if self.screen == Screen::Timeline && self.tab == 0 { self.filter_overlay(window, cx) } else { None };
         div()
             .size_full()
             .relative()
@@ -618,6 +634,9 @@ impl Render for Immagine {
                 if this.picker.sheet.visible() {
                     return this.picker.sheet.scroll_event(dy, phase, window);
                 }
+                if this.new_album.sheet.visible() {
+                    return this.new_album.sheet.scroll_event(dy, phase, window);
+                }
                 if this.select.overlay_open() {
                     return (false, false);
                 }
@@ -638,6 +657,9 @@ impl Render for Immagine {
             .children(settings)
             .children(jobs)
             .children(picker)
+            .children(new_album)
+            .children(purge)
+            .children(filter)
             .children(self.debug.then(|| fps_badge(self.meter.clone(), self.top, self.fps, self.worst_ms, H::renderer_name(self.webgpu))))
     }
 }

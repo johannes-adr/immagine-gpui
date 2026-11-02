@@ -7,3 +7,4 @@ assets/*.ttf
 .claude/worktrees/
 ios/dd/
 ios/Immagine.xcodeproj/
+**/.DS_Store

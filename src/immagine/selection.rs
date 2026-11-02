@@ -78,6 +78,12 @@ impl SelectState {
     }
 }
 
+/// What the favorite button does to a selection: if most of it is a favorite already, take the heart off all of
+/// it, else give it to all (a tie favorites).
+pub(super) fn favorite_target(favorites: usize, total: usize) -> bool {
+    favorites * 2 <= total
+}
+
 /// "Objekte auswählen" / "1 Objekt ausgewählt" / "N Objekte ausgewählt".
 pub(super) fn title(count: usize) -> String {
     match count {
@@ -88,9 +94,21 @@ pub(super) fn title(count: usize) -> String {
 }
 
 impl Immagine {
-    /// Select mode only makes sense on the Alle view of the Mediathek.
+    /// Select mode lives on the Alle view of the Mediathek and on the page of a server album.
     fn select_valid(&self) -> bool {
-        self.screen == Screen::Timeline && self.tab == 0 && self.range_mode == 2 && !self.search.open
+        self.screen == Screen::Timeline
+            && ((self.tab == 0 && self.range_mode == 2 && !self.search.open) || (self.tab == 1 && self.albums.open_album_id().is_some()))
+    }
+
+    /// The photos the grid in front shows, in its order (timeline: oldest first, album page: newest first).
+    fn sel_list(&self) -> Rc<Vec<TimelineItem>> {
+        if self.tab == 1 { self.albums.open_items().unwrap_or_default() } else { self.shown_items() }
+    }
+
+    /// The same, newest first.
+    fn sel_newest_first(&self) -> Vec<TimelineItem> {
+        let list = self.sel_list();
+        if self.tab == 1 { list.to_vec() } else { list.iter().rev().cloned().collect() }
     }
 
     /// Called from `render`: leaving the Alle view or the tab ends select mode.
@@ -101,7 +119,7 @@ impl Immagine {
     }
 
     pub(super) fn select_begin(&mut self, cx: &mut Context<Self>) {
-        if self.viewer.is_some() || self.items.is_empty() {
+        if self.viewer.is_some() || self.sel_list().is_empty() {
             return;
         }
         self.select.on = true;
@@ -148,11 +166,29 @@ impl Immagine {
         g.item_at(x, g.content_y(y, self.list_offset()))
     }
 
+    /// The list the selection works on: the Mediathek's, or the open album page's.
+    fn sel_handle(&self) -> ScrollHandle {
+        let list = match self.albums.open_scroll().filter(|_| self.tab == 1) {
+            Some(scroll) => scroll,
+            None => &self.timeline_scroll,
+        };
+        let handle = list.0.borrow().base_handle.clone();
+        handle
+    }
+
     fn list_offset(&self) -> f32 {
-        self.timeline_scroll.0.borrow().base_handle.offset().y.into()
+        self.sel_handle().offset().y.into()
+    }
+
+    /// Select mode is on an album page that nothing covers.
+    pub(super) fn sel_album_active(&self) -> bool {
+        self.select.on && self.screen == Screen::Timeline && self.tab == 1 && self.albums.open_album_id().is_some() && self.viewer.is_none()
     }
 
     fn sel_can_start(&self) -> bool {
+        if self.tab == 1 {
+            return self.sel_album_active() && !self.select.overlay_open();
+        }
         self.select.on && self.grid_active() && !self.grid_zooming() && !self.select.overlay_open() && !self.scrollbar.dragging()
     }
 
@@ -164,7 +200,7 @@ impl Immagine {
     // MARK: - Painting
 
     fn sel_begin_paint(&mut self, press: &Press) {
-        let items = self.items.clone();
+        let items = self.sel_list();
         let base: HashSet<usize> = {
             let ids = self.select.ids.borrow();
             if ids.is_empty() { HashSet::new() } else { items.iter().enumerate().filter(|(_, it)| ids.contains(&it.id)).map(|(i, _)| i).collect() }
@@ -226,7 +262,7 @@ impl Immagine {
             return;
         }
         self.select.last_tick = now;
-        let handle = self.timeline_scroll.0.borrow().base_handle.clone();
+        let handle = self.sel_handle();
         let (off, max): (f32, f32) = (handle.offset().y.into(), handle.max_offset().y.into());
         let next = (off - speed * dt).clamp(-max.max(0.), 0.);
         if next != off {
@@ -358,7 +394,7 @@ impl Immagine {
             let stored = self.downloads.ids.borrow();
             let selected = self.select.ids.borrow();
             // Timeline order (newest first), not the hash set's.
-            self.items.iter().rev().filter(|i| selected.contains(&i.id) && !stored.contains(&i.id)).map(|i| i.id.clone()).collect()
+            self.sel_newest_first().into_iter().filter(|i| selected.contains(&i.id) && !stored.contains(&i.id)).map(|i| i.id).collect()
         };
         self.jobs_download(ids, cx);
         self.select_end();
@@ -369,7 +405,7 @@ impl Immagine {
         let items: Vec<_> = {
             let selected = self.select.ids.borrow();
             // Timeline order (newest first), not the hash set's.
-            self.items.iter().rev().filter(|i| selected.contains(&i.id)).cloned().collect()
+            self.sel_newest_first().into_iter().filter(|i| selected.contains(&i.id)).collect()
         };
         self.share_assets(items, ShareFrom::Selection, cx);
     }
@@ -388,6 +424,56 @@ impl Immagine {
         engine.enqueue(&[AlbumOp::trash(ids.clone())]);
         let gone: HashSet<&str> = ids.iter().map(String::as_str).collect();
         Rc::make_mut(&mut self.items).retain(|i| !gone.contains(i.id.as_str()));
+        self.select_end();
+        self.sync(cx);
+        cx.notify();
+    }
+
+    /// Favorites the selection, or unfavorites it when most of it is one (`favorite_target`): applied locally at
+    /// once, sent by the outbox. Stays in select mode.
+    fn sel_favorite(&mut self, cx: &mut Context<Self>) {
+        let selected: Vec<TimelineItem> = {
+            let ids = self.select.ids.borrow();
+            self.sel_list().iter().filter(|i| ids.contains(&i.id)).cloned().collect()
+        };
+        if selected.is_empty() {
+            return;
+        }
+        let target = favorite_target(selected.iter().filter(|i| i.is_favorite).count(), selected.len());
+        let ids: Vec<String> = selected.iter().filter(|i| i.is_favorite != target).map(|i| i.id.clone()).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let Some(engine) = self.engine.as_mut() else {
+            self.status = "Bitte kurz warten, es wird synchronisiert.".into();
+            cx.notify();
+            return;
+        };
+        engine.enqueue(&[if target { AlbumOp::favorite(ids.clone()) } else { AlbumOp::unfavorite(ids.clone()) }]);
+        let changed: HashSet<&str> = ids.iter().map(String::as_str).collect();
+        for item in Rc::make_mut(&mut self.items).iter_mut().filter(|i| changed.contains(i.id.as_str())) {
+            item.is_favorite = target;
+        }
+        self.albums.refresh(engine.store());
+        self.sync(cx);
+        cx.notify();
+    }
+
+    /// Takes the selected photos out of the open album (they stay in the library): applied locally at once, sent by
+    /// the outbox. Undoable by adding them again, so there is no confirmation.
+    fn sel_remove_from_album(&mut self, cx: &mut Context<Self>) {
+        let ids: Vec<String> = self.select.ids.borrow().iter().cloned().collect();
+        let Some(album) = self.albums.open_album_id().map(str::to_string) else { return };
+        if ids.is_empty() {
+            return;
+        }
+        let Some(engine) = self.engine.as_mut() else {
+            self.status = "Bitte kurz warten, es wird synchronisiert.".into();
+            cx.notify();
+            return;
+        };
+        engine.enqueue(&[AlbumOp::remove(ids, &album)]);
+        self.albums.refresh(engine.store());
         self.select_end();
         self.sync(cx);
         cx.notify();
@@ -415,12 +501,32 @@ impl Immagine {
         let icon_color = Rgba { a: p.label.a * if enabled { 1. } else { 0.3 }, ..p.label };
         let round = |id: &'static str, g: Glyph, color: Rgba| button::circle(id, Surface::new(p.bar_tint), TRASH).child(glyph(g, 24., color));
         let mut add = round("sel-album", Glyph::AddToAlbum, icon_color);
-        let mut trash = round("sel-trash", Glyph::Trash, if enabled { rgb(RED).into() } else { icon_color });
+        // On an album page the last button takes the photos out of the album instead of deleting them.
+        let in_album = self.tab == 1;
+        let mut trash = if in_album {
+            round("sel-remove", Glyph::RemoveFromAlbum, icon_color)
+        } else {
+            round("sel-trash", Glyph::Trash, if enabled { rgb(RED).into() } else { icon_color })
+        };
         // Downloads whatever of the selection is not stored yet, as a job (see the jobs sheet).
         let missing = {
             let stored = self.downloads.ids.borrow();
             self.select.ids.borrow().iter().filter(|id| !stored.contains(*id)).count()
         };
+        // Heart: filled red when most of the selection is a favorite (a tap then removes them).
+        let favs = if enabled {
+            let ids = self.select.ids.borrow();
+            let list = self.sel_list();
+            list.iter().filter(|i| ids.contains(&i.id)).fold((0, 0), |(f, n), i| (f + i.is_favorite as usize, n + 1))
+        } else {
+            (0, 0)
+        };
+        let unfavorite = enabled && !favorite_target(favs.0, favs.1);
+        let mut fav = button::circle("sel-fav", Surface::new(p.bar_tint), TRASH).child(crate::components::icon::heart(
+            24.,
+            if unfavorite { rgb(RED).into() } else { icon_color },
+            unfavorite,
+        ));
         let mut download = round("sel-download", Glyph::Download, if missing > 0 { p.label } else { icon_color });
         // Shows how far the files are while they load; a tap on it cancels.
         let mut share = button::circle("sel-share", Surface::new(p.bar_tint), TRASH).child(match self.share_fraction(&ShareFrom::Selection) {
@@ -436,7 +542,13 @@ impl Immagine {
                 this.open_album_picker(ids, true, cx);
             }));
             share = share.active(button::dim).on_click(cx.listener(|this, _, _, cx| this.sel_share(cx)));
-            trash = trash.active(button::dim).on_click(cx.listener(|this, _, _, cx| this.open_sel_delete(cx)));
+            fav = fav.active(button::dim).on_click(cx.listener(|this, _, _, cx| this.sel_favorite(cx)));
+            trash = trash.active(button::dim);
+            trash = if in_album {
+                trash.on_click(cx.listener(|this, _, _, cx| this.sel_remove_from_album(cx)))
+            } else {
+                trash.on_click(cx.listener(|this, _, _, cx| this.open_sel_delete(cx)))
+            };
         }
         div()
             .id("selbar")
@@ -459,6 +571,7 @@ impl Immagine {
                     .child(add)
                     .child(download)
                     .child(share)
+                    .child(fav)
                     // While the confirmation morphs out of the trash button, the button itself is gone.
                     .child(if self.select.delete.active() { div().size(px(TRASH)).flex_none().into_any_element() } else { trash.into_any_element() }),
             )
@@ -514,6 +627,16 @@ impl Immagine {
 mod tests {
     use super::*;
     use ::gpui::TestAppContext;
+
+    #[::core::prelude::v1::test]
+    fn favorite_follows_the_majority() {
+        assert!(favorite_target(0, 4));
+        assert!(favorite_target(1, 4));
+        assert!(favorite_target(2, 4), "a tie favorites");
+        assert!(!favorite_target(3, 4));
+        assert!(!favorite_target(1, 1));
+        assert!(favorite_target(0, 1));
+    }
 
     #[::core::prelude::v1::test]
     fn titles_count_objects() {

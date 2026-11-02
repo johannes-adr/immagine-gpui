@@ -70,6 +70,11 @@ pub(crate) enum Glyph {
     More,
     /// A box with a lid (archive).
     Archive,
+    Plus,
+    /// Three lines getting shorter (filter).
+    Filter,
+    /// Album box with a bar (remove from album).
+    RemoveFromAlbum,
 }
 
 /// A `Glyph` of `size` px, stroked in `color`.
@@ -127,6 +132,16 @@ pub(crate) fn glyph(kind: Glyph, size: f32, color: Rgba) -> Canvas<()> {
                         stroke(&circle(kx, ly, 2.4), window);
                     }
                 }
+                Glyph::Filter => {
+                    stroke(&[(4., 6.5), (20., 6.5)], window);
+                    stroke(&[(7., 12.), (17., 12.)], window);
+                    stroke(&[(10., 17.5), (14., 17.5)], window);
+                }
+                Glyph::RemoveFromAlbum => {
+                    stroke(&[(6., 3.5), (18., 3.5)], window);
+                    stroke(&[(3.5, 7.), (20.5, 7.), (20.5, 20.5), (3.5, 20.5), (3.5, 7.)], window);
+                    stroke(&[(8.7, 13.75), (15.3, 13.75)], window);
+                }
                 Glyph::Search => {
                     stroke(&circle(10.5, 10.5, 6.8), window);
                     stroke(&[(15.5, 15.5), (21., 21.)], window);
@@ -139,6 +154,10 @@ pub(crate) fn glyph(kind: Glyph, size: f32, color: Rgba) -> Canvas<()> {
                 Glyph::Close => {
                     stroke(&[(5., 5.), (19., 19.)], window);
                     stroke(&[(19., 5.), (5., 19.)], window);
+                }
+                Glyph::Plus => {
+                    stroke(&[(12., 4.), (12., 20.)], window);
+                    stroke(&[(4., 12.), (20., 12.)], window);
                 }
                 Glyph::Gear => {
                     let mut pts = Vec::new();

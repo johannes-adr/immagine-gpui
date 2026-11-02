@@ -240,6 +240,11 @@ impl Player {
         self.shown.as_ref().map(|(_, image)| image.clone())
     }
 
+    /// Playback reached the end (the last picture stays shown).
+    pub(super) fn finished(&self) -> bool {
+        self.ended
+    }
+
     pub(super) fn is_playing(&self) -> bool {
         self.playing
     }

@@ -208,22 +208,18 @@ impl<T: HttpTransport> ImmichClient<T> {
         self.fetch_json(request(Method::Get, "/api/albums", Some(token), None)).await
     }
 
-    pub async fn create_album(&self, name: &str, asset_ids: &[String], token: &str) -> Result<Album, ClientError> {
-        let body = json_body(&CreateAlbumBody { album_name: name, asset_ids })?;
+    pub async fn create_album(&self, name: &str, description: &str, asset_ids: &[String], token: &str) -> Result<Album, ClientError> {
+        let body = json_body(&CreateAlbumBody { album_name: name, description, asset_ids })?;
         self.fetch_json(request(Method::Post, "/api/albums", Some(token), Some(body))).await
     }
 
-    pub async fn rename_album(&self, id: &str, name: &str, token: &str) -> Result<(), ClientError> {
-        let body = json_body(&serde_json::json!({ "albumName": name }))?;
-        self.fetch(request(Method::Patch, format!("/api/albums/{}", encode(id)), Some(token), Some(body))).await.map(|_| ())
+    /// Changes name, description and/or cover (`PATCH /api/albums/{id}`); fields left `None` stay as they are.
+    pub async fn update_album(&self, id: &str, update: &AlbumUpdate<'_>, token: &str) -> Result<Album, ClientError> {
+        let body = json_body(update)?;
+        self.fetch_json(request(Method::Patch, format!("/api/albums/{}", encode(id)), Some(token), Some(body))).await
     }
 
-    /// The photo on the album's tile.
-    pub async fn set_album_thumbnail(&self, id: &str, asset_id: &str, token: &str) -> Result<(), ClientError> {
-        let body = json_body(&serde_json::json!({ "albumThumbnailAssetId": asset_id }))?;
-        self.fetch(request(Method::Patch, format!("/api/albums/{}", encode(id)), Some(token), Some(body))).await.map(|_| ())
-    }
-
+    /// Deletes the album; its photos stay.
     pub async fn delete_album(&self, id: &str, token: &str) -> Result<(), ClientError> {
         self.fetch(request(Method::Delete, format!("/api/albums/{}", encode(id)), Some(token), None)).await.map(|_| ())
     }
@@ -299,6 +295,17 @@ impl<T: HttpTransport> ImmichClient<T> {
     pub async fn delete_assets(&self, ids: &[String], token: &str) -> Result<(), ClientError> {
         let body = json_body(&IdsForce { ids, force: false })?;
         self.fetch(request(Method::Delete, "/api/assets", Some(token), Some(body))).await.map(|_| ())
+    }
+
+    /// Deletes the assets for good (`force`): they skip the trash and cannot be restored.
+    pub async fn delete_assets_forever(&self, ids: &[String], token: &str) -> Result<(), ClientError> {
+        let body = json_body(&IdsForce { ids, force: true })?;
+        self.fetch(request(Method::Delete, "/api/assets", Some(token), Some(body))).await.map(|_| ())
+    }
+
+    /// Deletes everything in the server trash for good (`POST /api/trash/empty`).
+    pub async fn empty_trash(&self, token: &str) -> Result<(), ClientError> {
+        self.fetch(request(Method::Post, "/api/trash/empty", Some(token), None)).await.map(|_| ())
     }
 
     /// Moves albums, favorite, shared links, stack and sidecar of `source` over to `target`.
@@ -620,7 +627,20 @@ struct PersonSearchBody<'a> {
 #[serde(rename_all = "camelCase")]
 struct CreateAlbumBody<'a> {
     album_name: &'a str,
+    description: &'a str,
     asset_ids: &'a [String],
+}
+
+/// Fields of `PATCH /api/albums/{id}` that change.
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumUpdate<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_thumbnail_asset_id: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -910,12 +930,12 @@ mod tests {
     fn create_album_posts_name_and_asset_ids() {
         let client = client_with(ok(&ALBUM_JSON[1..ALBUM_JSON.len() - 1]));
         let ids = vec![ASSET.to_string()];
-        let album = block_on(client.create_album("Urlaub", &ids, TOKEN)).unwrap();
+        let album = block_on(client.create_album("Urlaub", "Sommer", &ids, TOKEN)).unwrap();
         assert_eq!(album.id, "al1");
         let req = sent(&client);
         assert_eq!(req.method, Method::Post);
         assert_eq!(req.path, "/api/albums");
-        assert_eq!(body_json(&req), json!({"albumName": "Urlaub", "assetIds": [ASSET]}));
+        assert_eq!(body_json(&req), json!({"albumName": "Urlaub", "description": "Sommer", "assetIds": [ASSET]}));
     }
 
     #[test]
@@ -1296,14 +1316,38 @@ mod tests {
     }
 
     #[test]
-    fn rename_album_sends_patch() {
+    fn update_album_patches_only_given_fields() {
         let t = MockTransport::new();
-        t.push(HttpResponse::json(200, "{}"));
+        t.push(HttpResponse::json(200, &ALBUM_JSON[1..ALBUM_JSON.len() - 1]));
         let c = ImmichClient::new("http://h", t).unwrap();
-        block_on(c.rename_album("a1", "Neu", "tok")).unwrap();
+        block_on(c.update_album("a1", &AlbumUpdate { album_name: Some("Neu"), description: Some(""), ..Default::default() }, "tok")).unwrap();
         let r = &c.transport.requests.borrow()[0];
         assert_eq!(r.method, Method::Patch);
         assert_eq!(r.path, "/api/albums/a1");
-        assert_eq!(String::from_utf8_lossy(r.body.as_ref().unwrap()), "{\"albumName\":\"Neu\"}");
+        assert_eq!(body_json(r), json!({"albumName": "Neu", "description": ""}));
+    }
+
+    #[test]
+    fn update_album_can_set_the_cover() {
+        let t = MockTransport::new();
+        t.push(HttpResponse::json(200, &ALBUM_JSON[1..ALBUM_JSON.len() - 1]));
+        let c = ImmichClient::new("http://h", t).unwrap();
+        block_on(c.update_album("a1", &AlbumUpdate { album_thumbnail_asset_id: Some("x"), ..Default::default() }, "tok")).unwrap();
+        assert_eq!(body_json(&c.transport.requests.borrow()[0]), json!({"albumThumbnailAssetId": "x"}));
+    }
+
+    #[test]
+    fn delete_forever_forces_and_empty_trash_posts() {
+        let client = client_with(HttpResponse::json(204, ""));
+        block_on(client.delete_assets_forever(&[ASSET.to_string()], TOKEN)).unwrap();
+        let req = sent(&client);
+        assert_eq!(req.method, Method::Delete);
+        assert_eq!(req.path, "/api/assets");
+        assert_eq!(body_json(&req), json!({"ids": [ASSET], "force": true}));
+        let client = client_with(HttpResponse::json(204, ""));
+        block_on(client.empty_trash(TOKEN)).unwrap();
+        let req = sent(&client);
+        assert_eq!(req.method, Method::Post);
+        assert_eq!(req.path, "/api/trash/empty");
     }
 }

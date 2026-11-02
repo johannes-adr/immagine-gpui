@@ -32,18 +32,16 @@ struct Cover {
 /// links), so they never go through `repair_albums` or the album picker.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Special {
-    Videos,
     Trash,
     /// Hidden entry: its tile is an empty, tappable slot.
     Archive,
 }
 
 impl Special {
-    const ALL: [Special; 3] = [Special::Videos, Special::Trash, Special::Archive];
+    const ALL: [Special; 2] = [Special::Trash, Special::Archive];
 
     fn title(self) -> &'static str {
         match self {
-            Special::Videos => "Videos",
             Special::Trash => "Papierkorb",
             Special::Archive => "Archiviert",
         }
@@ -51,7 +49,6 @@ impl Special {
 
     fn empty(self) -> &'static str {
         match self {
-            Special::Videos => "Keine Videos",
             Special::Trash => "Papierkorb ist leer",
             Special::Archive => "Archiv ist leer",
         }
@@ -61,7 +58,6 @@ impl Special {
     fn glyph(self) -> Option<crate::components::icon::Glyph> {
         use crate::components::icon::Glyph;
         match self {
-            Special::Videos => Some(Glyph::Play),
             Special::Trash => Some(Glyph::Trash),
             Special::Archive => None,
         }
@@ -71,7 +67,6 @@ impl Special {
     fn items(self, store: &MemoryStore) -> Vec<TimelineItem> {
         use crate::logic::store::Store;
         match self {
-            Special::Videos => store.video_items(),
             Special::Trash => store.trashed_items(),
             Special::Archive => store.archived_items(),
         }
@@ -81,7 +76,7 @@ impl Special {
 /// The album page that is open, with its photos newest first.
 struct OpenAlbum {
     id: String,
-    /// Set for the extra pages (Videos, Papierkorb); `id` is then synthetic.
+    /// Set for the extra pages (Papierkorb, Archiviert); `id` is then synthetic.
     special: Option<Special>,
     name: String,
     items: Rc<Vec<TimelineItem>>,
@@ -97,18 +92,30 @@ pub(super) struct AlbumsState {
     counts: BTreeMap<String, usize>,
     covers: HashMap<String, Cover>,
     /// Folder shown in the browser ("" = top level).
-    path: String,
+    pub(super) path: String,
     open: Option<OpenAlbum>,
     /// Count and newest asset of the extra pages, in `Special::ALL` order.
     specials: Vec<(usize, Option<Cover>)>,
     /// Bumped on every open of the Papierkorb, so a late server answer for an earlier open is dropped.
     trash_serial: u32,
+    /// Bumped by every `refresh`: the album links may have changed (the Mediathek filter caches by it).
+    pub(super) generation: u32,
 }
 
 impl AlbumsState {
     /// Scroll handle of the open album page's photo list.
     pub(super) fn open_scroll(&self) -> Option<&UniformListScrollHandle> {
         self.open.as_ref().map(|o| &o.scroll)
+    }
+
+    /// The photos of the open album page (newest first), not for Papierkorb, Archiviert.
+    pub(super) fn open_items(&self) -> Option<Rc<Vec<TimelineItem>>> {
+        self.open.as_ref().filter(|o| o.special.is_none()).map(|o| o.items.clone())
+    }
+
+    /// The server album whose page is open (not Papierkorb, Archiviert).
+    pub(super) fn open_album_id(&self) -> Option<&str> {
+        self.open.as_ref().filter(|o| o.special.is_none()).map(|o| o.id.as_str())
     }
 
     pub(super) fn album_ids(&self) -> Vec<String> {
@@ -118,6 +125,7 @@ impl AlbumsState {
     /// Called after every sync and after the first load; copy what the view needs out of the store.
     pub(super) fn refresh(&mut self, store: &MemoryStore) {
         use crate::logic::store::Store;
+        self.generation = self.generation.wrapping_add(1);
         self.albums = store.albums();
         self.counts = store.album_visible_counts();
         self.tree = AlbumTree::new(&self.albums, &store.local_folders());
@@ -146,6 +154,11 @@ impl AlbumsState {
             })
             .collect();
         if let Some(open) = self.open.as_mut() {
+            if open.special.is_none() {
+                if let Some(album) = self.albums.iter().find(|a| a.id == open.id) {
+                    open.name = AlbumPath::leaf_of_album_name(&album.album_name);
+                }
+            }
             open.items = Rc::new(match open.special {
                 Some(special) => special.items(store),
                 None => newest_first(store.album_assets(&open.id)),
@@ -218,7 +231,7 @@ impl Immagine {
         self.repair_albums(vec![id.to_string()], cx);
     }
 
-    /// Opens Videos or Papierkorb: the store's current contents at once, refreshed on every sync.
+    /// Opens Papierkorb or Archiviert: the store's current contents at once, refreshed on every sync.
     /// The Papierkorb is also asked from the server (see `load_trash`).
     fn open_special(&mut self, special: Special, cx: &mut Context<Self>) {
         let Some(engine) = self.engine.as_ref() else { return };
@@ -335,6 +348,11 @@ impl Immagine {
         cx.notify();
     }
 
+    /// Back to the browser (the open album was deleted); the caller notifies.
+    pub(super) fn leave_album_page(&mut self) {
+        self.albums.open = None;
+    }
+
     fn go_to_folder(&mut self, path: String, cx: &mut Context<Self>) {
         self.albums.path = path;
         cx.notify();
@@ -376,10 +394,16 @@ impl Immagine {
             return div().into_any_element();
         };
         let subtitle = match open.special {
-            Some(Special::Videos) => count_label(open.items.len(), "Video", "Videos"),
             Some(special) if open.items.is_empty() => special.empty().to_string(),
+            None if self.select.on => self.share.notice.clone().unwrap_or_else(|| super::selection::title(self.select.count())),
             _ => count_label(open.items.len(), "Foto", "Fotos"),
         };
+        let description = open
+            .special
+            .is_none()
+            .then(|| self.albums.albums.iter().find(|a| a.id == open.id).and_then(|a| a.description.clone()))
+            .flatten()
+            .filter(|d| !d.trim().is_empty());
         let back = div().flex().flex_row().child(button::back("album-back", Surface::new(p.glass_tint), rgb(BLUE).into()).on_click(cx.listener(|this, _, _, cx| this.close_album(cx))));
         let header = div()
             .px(px(PAD))
@@ -389,7 +413,25 @@ impl Immagine {
             .flex_col()
             .gap_1()
             .child(back)
-            .child(div().text_size(px(34.)).font_weight(FontWeight::BOLD).truncate().child(open.name.clone()))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(div().flex_1().min_w_0().text_size(px(34.)).font_weight(FontWeight::BOLD).truncate().child(open.name.clone()))
+                    .children((open.special == Some(Special::Trash) && !open.items.is_empty()).then(|| self.purge_chip(p, cx)))
+                    .children((open.special.is_none() && !open.items.is_empty()).then(|| self.sel_header_button(p, cx)))
+                    .children((open.special.is_none() && !self.select.on).then(|| {
+                        let id = open.id.clone();
+                        button::circle("album-edit", Surface::new(p.glass_tint), 36.)
+                            .active(button::dim)
+                            .child(crate::components::icon::glyph(crate::components::icon::Glyph::More, 20., p.label))
+                            .on_click(cx.listener(move |this, _, window, cx| this.open_edit_album(&id, window, cx)))
+                    })),
+            )
+            .children(description.map(|text| div().text_size(px(15.)).child(text)))
             .child(div().text_size(px(15.)).text_color(p.secondary).child(subtitle))
             .children(self.thumbs_debug(p, None));
         let list = self.photo_grid("album-photos", open.items.clone(), 0., (&open.scroll, None), p, window, cx);
@@ -475,7 +517,7 @@ impl Immagine {
             );
         }
 
-        // Videos, Papierkorb and the hidden Archiviert slot below the albums, set apart by a rule.
+        // Papierkorb and the hidden Archiviert slot below the albums, set apart by a rule.
         let mut extras: Vec<AnyElement> = Vec::new();
         if st.path.is_empty() {
             for (i, special) in Special::ALL.iter().copied().enumerate() {
@@ -502,7 +544,6 @@ impl Immagine {
                     .justify_center()
                     .children(special.glyph().filter(|_| picture.is_none()).map(|g| crate::components::icon::glyph(g, 40., p.secondary)))
                     .children(picture.map(|image| img(image).size_full().rounded(px(super::TILE_RADIUS)).object_fit(ObjectFit::Cover)));
-                let (one, many) = if special == Special::Videos { ("Video", "Videos") } else { ("Foto", "Fotos") };
                 extras.push(
                     div()
                         .id(("album-special", i))
@@ -512,7 +553,7 @@ impl Immagine {
                         .gap_1()
                         .active(|s| s.opacity(0.6))
                         .child(cell)
-                        .child(caption(p, special.title(), count_label(count, one, many)))
+                        .child(caption(p, special.title(), count_label(count, "Foto", "Fotos")))
                         .on_click(tap::listener(cx, move |this, cx| {
                                 this.open_special(special, cx)
                         }))
@@ -564,6 +605,12 @@ impl Immagine {
                     .gap_3()
                     .child(div().flex_1().min_w_0().text_size(px(34.)).font_weight(FontWeight::BOLD).truncate().child(title))
                     .child(self.jobs_button(p, cx))
+                    .child(
+                        button::circle("albums-new", Surface::new(p.glass_tint), 36.)
+                            .active(button::dim)
+                            .child(crate::components::icon::glyph(crate::components::icon::Glyph::Plus, 20., p.label))
+                            .on_click(cx.listener(|this, _, window, cx| this.open_new_album(window, cx))),
+                    )
                     .child(
                         button::circle("albums-settings", Surface::new(p.glass_tint), 36.)
                             .active(button::dim)
@@ -617,7 +664,7 @@ mod tests {
     impl Render for Probe {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             let taps = self.0.clone();
-            div().size_full().child(hidden_slot(2, 120.).on_click(move |_, _, _| taps.set(taps.get() + 1)))
+            div().size_full().child(hidden_slot(1, 120.).on_click(move |_, _, _| taps.set(taps.get() + 1)))
         }
     }
 

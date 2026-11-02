@@ -627,6 +627,31 @@ pub(super) fn init_cache(store: &SharedThumbs, cx: &mut App) {
     .detach();
 }
 
+/// "Foto neu laden": drops everything held for asset `id` (decoded renditions, failed marks, its entries in the
+/// persistent thumbnail cache), so the next frame fetches it from the server again.
+pub(super) fn reload(store: &SharedThumbs, id: &str, cx: &mut App) {
+    let prefix = format!("t:{id}:");
+    let stale: Vec<String> = {
+        let mut s = store.borrow_mut();
+        s.forget(id);
+        for kind in ["t", "p", "f"] {
+            s.failed.remove(&format!("{kind}:{id}"));
+        }
+        let stale: Vec<String> = s.cache.order.iter().filter(|k| k.starts_with(&prefix)).cloned().collect();
+        s.cache.order.retain(|k| !k.starts_with(&prefix));
+        for key in &stale {
+            s.cache.known.remove(&norm(key));
+        }
+        stale
+    };
+    cx.spawn(async move |_| {
+        for key in stale {
+            let _ = H::blob_delete(THUMB_CACHE_DB, &key).await;
+        }
+    })
+    .detach();
+}
+
 /// Forgets the cached keys (logout; the caller clears the db itself).
 pub(super) fn clear_cache(store: &SharedThumbs) {
     store.borrow_mut().cache = CacheIndex::default();
